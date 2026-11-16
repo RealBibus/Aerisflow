@@ -1,0 +1,239 @@
+<Window x:Class="Aerisflow.UI.TrayMenuWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Aerisflow"
+        Width="300"
+        SizeToContent="Height"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        Deactivated="Window_Deactivated"
+        KeyDown="Window_KeyDown"
+        Closing="Window_Closing">
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="MenuHoverBrush" Color="#15FFFFFF"/>
+        <SolidColorBrush x:Key="MenuPressBrush" Color="#0DFFFFFF"/>
+        <SolidColorBrush x:Key="MenuIdleBrush" Color="#00FFFFFF"/>
+
+        <Style x:Key="SliderFill" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Height="4" VerticalAlignment="Center" CornerRadius="2" Background="{DynamicResource {x:Static SystemColors.AccentColorBrushKey}}"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SliderEmpty" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Height="4" VerticalAlignment="Center" CornerRadius="2" Background="#33FFFFFF"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SliderThumb" TargetType="Thumb">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border Width="14" Height="14" CornerRadius="7" Background="{DynamicResource {x:Static SystemColors.AccentColorBrushKey}}" BorderBrush="#FF000000" BorderThickness="1.5"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="MenuSlider" TargetType="Slider">
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid VerticalAlignment="Center" Background="Transparent">
+                            <Border x:Name="Track" Height="4" CornerRadius="2" VerticalAlignment="Center" Background="#33FFFFFF" SnapsToDevicePixels="True"/>
+                            <Track x:Name="PART_Track" VerticalAlignment="Center">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Style="{StaticResource SliderFill}"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Style="{StaticResource SliderEmpty}"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource SliderThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SwitchToggle" TargetType="ToggleButton">
+            <Setter Property="Width" Value="40"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Grid>
+                            <Border x:Name="Track" CornerRadius="10" Background="#33FFFFFF"/>
+                            <Ellipse x:Name="Knob" Width="12" Height="12" Fill="#FFB9B9BE" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource {x:Static SystemColors.AccentColorBrushKey}}"/>
+                                <Setter TargetName="Knob" Property="Fill" Value="#FFFFFFFF"/>
+                                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+                                <Setter TargetName="Knob" Property="Margin" Value="0,0,4,0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="MenuButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource MenuIdleBrush}"/>
+            <Setter Property="Foreground" Value="#F2FFFFFF"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{StaticResource MenuHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Background" Value="{StaticResource MenuPressBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.4"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#E6FFFFFF"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="SectionValue" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#99FFFFFF"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+        </Style>
+    </Window.Resources>
+
+    <!-- Полупрозрачный фон для блюра -->
+    <Border x:Name="RootBorder"
+            Margin="0"
+            CornerRadius="8"
+            Background="#991C1C1C"
+            BorderBrush="#25FFFFFF"
+            BorderThickness="1"
+            Padding="16,12,16,12">
+        <StackPanel>
+            <!-- Intensity -->
+            <Grid Margin="0,0,0,4">
+                <TextBlock Text="Intensity" Style="{StaticResource SectionLabel}"/>
+                <TextBlock x:Name="IntensityValue" Text="100%" HorizontalAlignment="Right"
+                           Foreground="{DynamicResource {x:Static SystemColors.AccentColorBrushKey}}" FontSize="12" FontWeight="SemiBold"/>
+            </Grid>
+            <Slider x:Name="IntensitySlider" Style="{StaticResource MenuSlider}" Minimum="0.1" Maximum="1.6" SmallChange="0.05" LargeChange="0.2" Margin="0,0,0,12"/>
+
+            <!-- Opacity -->
+            <Border x:Name="OpacityHit" Background="Transparent" Margin="0,0,0,4" MouseLeftButtonUp="OpacityHit_MouseUp" Cursor="Arrow" ToolTip="Яркость снега.">
+                <Grid Height="24">
+                    <TextBlock Text="Opacity" Style="{StaticResource SectionLabel}"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
+                        <TextBlock x:Name="OpacityValue" Text="100%" Style="{StaticResource SectionValue}"/>
+                        <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="6,1,0,0" Foreground="#99FFFFFF" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+            <Slider x:Name="OpacitySlider" Style="{StaticResource MenuSlider}" Minimum="0.15" Maximum="1" SmallChange="0.05" LargeChange="0.2" Margin="0,0,0,12" Visibility="Collapsed"/>
+
+            <!-- Mode -->
+            <Border x:Name="ModeHit" Background="Transparent" Margin="0,0,0,12" MouseLeftButtonUp="ModeHit_MouseUp" Cursor="Arrow" ToolTip="Режим ветра снега.">
+                <Grid Height="24">
+                    <TextBlock Text="Mode" Style="{StaticResource SectionLabel}"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
+                        <TextBlock x:Name="ModeValue" Text="Auto" Style="{StaticResource SectionValue}"/>
+                        <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="6,1,0,0" Foreground="#99FFFFFF" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Weather sync (Отключена) -->
+            <Border x:Name="WeatherSyncHit" Background="Transparent" Margin="0,0,0,12" IsHitTestVisible="False" Opacity="0.4" ToolTip="Пока недоступно.">
+                <Grid Height="24">
+                    <TextBlock Text="Weather sync" Style="{StaticResource SectionLabel}"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
+                        <TextBlock x:Name="WeatherSyncValue" Text="Off" Style="{StaticResource SectionValue}"/>
+                        <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="6,1,0,0" Foreground="#99FFFFFF" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Melt -->
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Melt snow" Style="{StaticResource SectionLabel}" VerticalAlignment="Center"/>
+                <ToggleButton Grid.Column="1" x:Name="MeltToggle" Style="{StaticResource SwitchToggle}" VerticalAlignment="Center"/>
+            </Grid>
+
+            <!-- Melt after -->
+            <Border x:Name="MeltAfterHit" Background="Transparent" Margin="0,0,0,12" MouseLeftButtonUp="MeltAfterHit_MouseUp" Cursor="Arrow" ToolTip="Сколько секунд сохранять снег.">
+                <Grid Height="24">
+                    <TextBlock Text="Melt after" Style="{StaticResource SectionLabel}"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
+                        <TextBlock x:Name="MeltAfterValue" Text="Off" Style="{StaticResource SectionValue}"/>
+                        <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="6,1,0,0" Foreground="#99FFFFFF" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border Height="1" Background="#15FFFFFF" Margin="0,4,0,8"/>
+
+            <Button x:Name="ClearButton" Style="{StaticResource MenuButton}" Content="Clear snow" Margin="0,0,0,2"/>
+            <Button x:Name="SettingsButton" Style="{StaticResource MenuButton}" Content="Settings" Margin="0,0,0,2"/>
+            <Button x:Name="QuitButton" Style="{StaticResource MenuButton}" Content="Quit"/>
+        </StackPanel>
+    </Border>
+</Window>

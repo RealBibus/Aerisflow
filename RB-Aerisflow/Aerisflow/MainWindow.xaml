@@ -1,0 +1,24 @@
+<Window x:Class="Aerisflow.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:Aerisflow="clr-namespace:Aerisflow"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Focusable="False"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        SizeToContent="Manual"
+        Width="1920"
+        Height="1080"
+        SourceInitialized="MainWindow_SourceInitialized"
+        Closing="MainWindow_Closing">
+    <Grid>
+        <Aerisflow:SnowCanvas x:Name="SnowCanvas"
+                             HorizontalAlignment="Stretch"
+                             VerticalAlignment="Stretch" />
+    </Grid>
+</Window>
