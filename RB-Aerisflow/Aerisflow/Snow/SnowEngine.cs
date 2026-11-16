@@ -3,10 +3,15 @@ using System.Collections.Generic;
 
 namespace Aerisflow;
 
+public enum FullscreenOverlayMode { On, Off }
+
 public sealed class SnowEngine
 {
     private const double MissingGrace = 0.12;
-    private const double JumpSpeed = 6000.0;
+    private const double JumpDistance = 240.0;
+    private const int    MaxFlakes   = 2500;
+    private const double IgnoreFalloffDistance = 40.0;
+    private const double Shaking = 4.0;
 
     public double MeltAfterSeconds { get; set; } = 0;
 
@@ -22,8 +27,9 @@ public sealed class SnowEngine
 
     private double _time;
     private double _spawnAcc;
-    private double _relaxAcc;
+    private double _frameDt = 1.0 / 60.0;
     private double _width;
+    private int _recycleIndex;
     private SnowDrift? _ground;
 
     private double _groundLeft;
@@ -34,6 +40,7 @@ public sealed class SnowEngine
     public double Top { get; private set; }
     public double Bottom { get; private set; }
     public double ScreenHeight => Bottom - Top;
+    public double RenderAlpha => 1.0;
 
     public double Width
     {
@@ -47,15 +54,32 @@ public sealed class SnowEngine
     }
 
     public double Intensity { get; set; } = 0.6;
-    public double Opacity { get; set; } = 1.0;
-    public bool Melt { get; set; }
-    public double Wind { get; set; } = 0;
+    public double Opacity   { get; set; } = 1.0;
+    public bool   Melt      { get; set; }
+    public double Wind      { get; set; } = 0;
+
+    public double SpeedMultiplier    { get; set; } = 1.0;
+    public double ModeIntensityBoost { get; set; } = 1.0;
+    public double ModeSpeedBoost     { get; set; } = 1.0;
 
     public int TargetFps { get; set; } = 60;
 
-    public IReadOnlyList<Flake> Flakes => _flakes;
+    public FullscreenOverlayMode FullscreenMode { get; set; } = FullscreenOverlayMode.On;
+    public bool IsFullscreenAppActive { get; set; }
+
+    public IReadOnlyList<Flake> Flakes   => _flakes;
     public IReadOnlyList<SnowDrift> Drifts => _drifts;
+
     public bool IsEmpty => _flakes.Count == 0 && _drifts.TrueForAll(d => !d.HasSnow);
+
+    public void Advance(double frameDt, IReadOnlyList<WindowRect> windows)
+    {
+        if (frameDt <= 0) return;
+        if (frameDt > 0.05) frameDt = 0.05;
+        _frameDt = frameDt;
+        SyncWindows(windows, frameDt);
+        Update(frameDt);
+    }
 
     public void SetScreen(double top, double bottom)
     {
@@ -76,9 +100,7 @@ public sealed class SnowEngine
             foreach (var w in windows)
             {
                 if (w != null && w.Handle != IntPtr.Zero && w.Bottom > w.Top && w.Right > w.Left)
-                {
                     _windows.Add(w);
-                }
             }
         }
 
@@ -107,16 +129,17 @@ public sealed class SnowEngine
 
             double dx = w.Left - drift.Left;
             double dy = w.Top - drift.Top;
-            double elapsed = Math.Max(dt, 1.0 / 120.0);
-            double speed = Math.Sqrt(dx * dx + dy * dy) / elapsed;
-            drift.LastSpeed = speed;
+            double seconds = Math.Max(dt, 1.0 / 240.0);
+            double currentVX = dx / seconds;
+            double currentVY = dy / seconds;
+            drift.LastSpeed = Math.Sqrt(dx * dx + dy * dy) / Math.Max(dt, 1.0 / 120.0);
 
-            if (speed > JumpSpeed)
+            if (Math.Abs(dx) > JumpDistance || Math.Abs(dy) > JumpDistance)
             {
                 if (drift.HasSnow)
                 {
-                    Spill(drift, drift.Volume, 0.7);
-                    drift.ClearSnow();
+                    int bias = dx > 0 ? -1 : (dx < 0 ? 1 : 0);
+                    Shed(drift, drift.Volume, 0, 0, 0, bias);
                 }
                 drift.ResetMotion(w.Left, w.Top, w.Right);
             }
@@ -125,9 +148,8 @@ public sealed class SnowEngine
                 drift.MoveTo(w.Left, w.Top, w.Right);
             }
 
-            double seconds = Math.Max(dt, 1.0 / 240.0);
-            drift.LastVX = dx / seconds;
-            drift.LastVY = dy / seconds;
+            drift.LastVX = currentVX;
+            drift.LastVY = currentVY;
         }
 
         for (int i = _drifts.Count - 1; i >= 0; i--)
@@ -144,7 +166,7 @@ public sealed class SnowEngine
             drift.MissingFor += dt;
             if (drift.MissingFor < MissingGrace) continue;
 
-            Spill(drift, drift.Volume, 0.6);
+            Shed(drift, drift.Volume, 0.15, drift.LastVX, drift.LastVY, 0);
             _drifts.RemoveAt(i);
         }
     }
@@ -152,19 +174,20 @@ public sealed class SnowEngine
     public void Update(double dt)
     {
         if (dt <= 0) return;
+
         _time += dt;
 
-        double rate = 45.0 * Intensity;
+        double rate = 45.0 * Intensity * Math.Max(0.1, ModeIntensityBoost);
         _spawnAcc += dt * rate;
+        if (_spawnAcc > 4) _spawnAcc = 4;
         int guard = 0;
-        while (_spawnAcc >= 1.0 && guard < 24)
+        while (_spawnAcc >= 1.0 && guard < 24 && _flakes.Count < MaxFlakes)
         {
             _spawnAcc -= 1.0;
             Spawn();
             guard++;
         }
 
-        // Усиленный ветер для более быстрой физики
         double gust = 8.0 * Math.Sin(_time * 0.35) + 5.0 * Math.Sin(_time * 1.1 + 1.7);
 
         int write = 0;
@@ -176,45 +199,115 @@ public sealed class SnowEngine
         }
         if (write < count) _flakes.RemoveRange(write, count - write);
 
-        _relaxAcc += dt;
-        int relaxSteps = (int)(_relaxAcc * 60.0);
-        if (relaxSteps > 2) relaxSteps = 2;
-        _relaxAcc -= relaxSteps / 60.0;
-        if (_relaxAcc > 0.25) _relaxAcc = 0;
+        double relaxStrength = Math.Min(1.0, dt * 60.0);
 
         foreach (var drift in _drifts)
         {
             if (Melt || (MeltAfterSeconds > 0 && _time - drift.Born >= MeltAfterSeconds))
-            {
                 drift.Melt(dt);
-            }
 
             drift.Step(dt);
 
             if (drift.BrokeOff)
             {
                 drift.BreakVelocity(out double vx, out double vy);
-                double volume = drift.Volume;
-                Spill(drift, volume, 0.8, vx, vy);
-                drift.ClearSnow();
+                Shed(drift, drift.Volume, 1.0, vx, vy, 0);
+                drift.Shedding = false;
+            }
+            else
+            {
+                StepShedding(drift, dt);
+                PeelShaken(drift, dt);
             }
 
             _chunks.Clear();
             drift.TakeChunks(_chunks);
             for (int i = 0; i < _chunks.Count; i++)
-            {
                 ReleaseChunk(drift, _chunks[i]);
-            }
 
-            for (int r = 0; r < relaxSteps; r++)
-            {
-                drift.Relax();
-            }
+            drift.Relax(relaxStrength);
 
             drift.TakeSpill(out double spillLeft, out double spillRight);
             if (spillLeft > 1.5) ReleaseEdge(drift, true, spillLeft);
             if (spillRight > 1.5) ReleaseEdge(drift, false, spillRight);
         }
+    }
+
+    private void PeelShaken(SnowDrift drift, double dt)
+    {
+        if (drift.Owner == IntPtr.Zero) return;
+        if (drift.Agitation <= Shaking || !drift.HasSnow) return;
+
+        double rate = Math.Min(0.8, 0.06 * (drift.Agitation - Shaking));
+        int picks = (int)(drift.Heights.Length * rate * dt * 2.0 + _rand.NextDouble());
+        if (picks <= 0) return;
+
+        drift.BreakVelocity(out double cvx, out double cvy);
+
+        for (int p = 0; p < picks; p++)
+        {
+            int col = _rand.Next(drift.Heights.Length);
+            double h = drift.Heights[col];
+            if (h <= 0.2) continue;
+
+            double amount = h * 0.5;
+            drift.Heights[col] = h - amount;
+
+            double x = drift.SurfaceLeft + (col + 0.5) * SnowDrift.ColumnWidth;
+            double y = drift.SurfaceTop - h + amount;
+
+            var f = NewFlake(ParticlePreset.Lump, x, y);
+            f.R = Math.Clamp(Math.Sqrt(amount * SnowDrift.ColumnWidth / Math.PI), 0.8, 4.0);
+            f.Volume = amount * SnowDrift.ColumnWidth;
+            f.Alpha = 0.95;
+            f.LandDelay = 0.05;
+            f.IgnoreOwner = drift.Owner;
+            f.Lump = true;
+            f.FallSpeed = 0;
+            f.SwayAmp = 0;
+            f.SwaySpeed = 0;
+            f.VX = cvx + (_rand.NextDouble() - 0.5) * 160;
+            f.VY = cvy - (50 + _rand.NextDouble() * 150);
+            AddFlake(f);
+        }
+    }
+
+    private void StepShedding(SnowDrift drift, double dt)
+    {
+        if (drift.Owner == IntPtr.Zero) return;
+
+        double vx = drift.TrackVX;
+        double vy = drift.TrackVY;
+        double speed = Math.Sqrt(vx * vx + vy * vy);
+
+        if (drift.Shedding)
+        {
+            if (speed < 750) drift.Shedding = false;
+        }
+        else if (speed > 1100)
+        {
+            drift.Shedding = true;
+        }
+
+        if (!drift.Shedding || !drift.HasSnow) return;
+
+        double dV = drift.Volume * Math.Min(4.8, (speed - 750) * 0.0012) * dt;
+        if (dV < 0.3) return;
+
+        int bias = vx > 0 ? -1 : (vx < 0 ? 1 : 0);
+        Shed(drift, dV, 0.5, vx, vy, bias);
+    }
+
+    private void AddFlake(Flake f)
+    {
+        if (_flakes.Count < MaxFlakes)
+        {
+            _flakes.Add(f);
+            return;
+        }
+        if (_recycleIndex >= _flakes.Count) _recycleIndex = 0;
+        _flakes[_recycleIndex] = f;
+        _recycleIndex++;
     }
 
     private Flake NewFlake(ParticlePreset preset, double x, double y)
@@ -224,6 +317,9 @@ public sealed class SnowEngine
         {
             X = x,
             Y = y,
+            PrevX = x,
+            PrevY = y,
+            SpawnY = y,
             R = data.Radius(_rand),
             FallSpeed = data.Fall(_rand),
             Alpha = data.Alpha(_rand),
@@ -236,13 +332,21 @@ public sealed class SnowEngine
 
     private void Spawn()
     {
+        if (_flakes.Count >= MaxFlakes) return;
+
         double u = _rand.NextDouble();
         var preset = u < 0.62 ? ParticlePreset.Far
             : u < 0.92 ? ParticlePreset.Mid
             : ParticlePreset.Near;
 
         var f = NewFlake(preset, _rand.NextDouble() * Math.Max(10, Width), 0);
+
+        double speedFactor = Math.Max(0.1, SpeedMultiplier * ModeSpeedBoost);
+        f.FallSpeed *= speedFactor;
+
         f.Y = Top - f.R - _rand.NextDouble() * 40;
+        f.PrevY = f.Y;
+        f.SpawnY = f.Y;
         f.VX = 0;
         f.VY = f.FallSpeed;
         _flakes.Add(f);
@@ -250,39 +354,70 @@ public sealed class SnowEngine
 
     private bool UpdateFlake(ref Flake f, double dt, double gust)
     {
+        if (f.IgnoreOwner != IntPtr.Zero && f.Y - f.SpawnY > IgnoreFalloffDistance)
+            f.IgnoreOwner = IntPtr.Zero;
+
+        f.PrevX = f.X;
+        f.PrevY = f.Y;
+
+        if (f.MoteLife > 0)
+        {
+            f.MoteLife -= dt;
+            f.VX *= Math.Exp(-dt * 3.2);
+            f.VY *= Math.Exp(-dt * 3.2);
+            f.VY += 30 * dt;
+            f.X += (f.VX + Wind * 0.4) * dt;
+            f.Y += f.VY * dt;
+            f.Alpha *= Math.Exp(-dt * 2.5);
+            return f.MoteLife > 0 && f.Alpha > 0.02;
+        }
+
+        if (f.LandDelay > 0) f.LandDelay -= dt;
         double prevBottom = f.Y + f.R;
 
+        if (f.Lump)
+        {
+            f.VY += 2500 * dt;
+            f.X += f.VX * dt;
+            f.Y += f.VY * dt;
+            f.VX *= Math.Exp(-dt * 0.8);
+
+            double newBottom = f.Y + f.R;
+            SnowDrift? target = f.LandDelay <= 0 ? FindLanding(f, prevBottom, newBottom) : null;
+            if (target != null)
+            {
+                double volume = f.Volume > 0 ? f.Volume : Math.PI * f.R * f.R;
+                target.Add(f.X - target.SurfaceLeft, volume);
+                double surface = target.SurfaceTop - target.HeightAtWorld(f.X);
+                double impact = Math.Max(0, f.VY);
+                if (impact > 500 && volume > 40)
+                    Puff(f.X, surface, f.VX * 0.3, -impact * 0.1, volume * 0.08);
+                return false;
+            }
+
+            if (f.X < -160 || f.X > Width + 160 || f.Y > Bottom + 100) return false;
+            return true;
+        }
+
         double sway = Math.Sin(_time * f.SwaySpeed * 1.2 + f.Phase) * f.SwayAmp;
-        
-        // УСКОРЕНИЕ: Снег падает быстрее и резче реагирует на ветер
-        f.VX *= 1.0 - Math.Min(0.9, dt * 2.0); 
-        f.VY += (f.FallSpeed * 1.5 - f.VY) * Math.Min(1.0, dt * 4.0); 
+        f.VX *= Math.Exp(-dt * 2.0);
+        f.VY += (f.FallSpeed * 1.5 - f.VY) * (1.0 - Math.Exp(-dt * 4.0));
 
         f.X += (f.VX + sway + Wind + gust) * dt * 1.3;
-        f.Y += f.VY * (1.0 + 0.05 * Math.Sin(_time * f.SwaySpeed * 1.7 + f.Phase)) * dt;
+        f.Y += f.VY * dt;
 
         if (f.X < -160 || f.X > Width + 160) return false;
 
-        double newBottom = f.Y + f.R;
-        SnowDrift? target = FindLanding(f, prevBottom, newBottom);
-        if (target != null)
+        double newBottom2 = f.Y + f.R;
+        SnowDrift? target2 = f.LandDelay <= 0 ? FindLanding(f, prevBottom, newBottom2) : null;
+        if (target2 != null)
         {
             double volume = f.Volume > 0 ? f.Volume : Math.PI * f.R * f.R;
-            double surface = target.SurfaceTop - target.HeightAtWorld(f.X);
-            if (f.Lump)
-            {
-                target.Add(f.X - target.SurfaceLeft, volume * 0.85);
-                Puff(f.X, surface, 0, 0, volume * 0.15);
-            }
-            else
-            {
-                target.Add(f.X - target.SurfaceLeft, volume);
-            }
+            target2.Add(f.X - target2.SurfaceLeft, volume);
             return false;
         }
 
         if (f.Y > Bottom + 80) return false;
-
         return true;
     }
 
@@ -333,6 +468,7 @@ public sealed class SnowEngine
 
         foreach (var drift in _drifts)
         {
+            if (f.IgnoreOwner != IntPtr.Zero && drift.Owner == f.IgnoreOwner) continue;
             if (f.X + f.R <= drift.SurfaceLeft || f.X - f.R >= drift.SurfaceRight) continue;
             if (!drift.IsVisibleAtWorld(f.X)) continue;
 
@@ -355,113 +491,138 @@ public sealed class SnowEngine
     {
         if (chunk.Volume < 0.4) return;
 
-        double radius = Math.Sqrt(chunk.Volume / Math.PI);
-        if (radius < 1.0) radius = 1.0;
-        if (radius > 8.0) radius = 8.0;
-
-        var f = NewFlake(ParticlePreset.Lump,
-            chunk.X + (_rand.NextDouble() - 0.5) * 2,
-            chunk.Y);
-        f.R = radius;
-        f.VX = chunk.VX * 0.35 + (_rand.NextDouble() - 0.5) * 25;
-        f.VY = chunk.VY * 0.2 + f.FallSpeed * 0.3;
-        f.Volume = chunk.Volume;
-        f.Lump = true;
-        f.SwayAmp = 3 + _rand.NextDouble() * 8;
-        f.SwaySpeed = 0.5 + _rand.NextDouble() * 1.2;
-        _flakes.Add(f);
+        double radius = Math.Clamp(Math.Sqrt(chunk.Volume / Math.PI), 1.0, 6.0);
+        var lump = NewFlake(ParticlePreset.Lump, chunk.X, chunk.Y);
+        lump.R = radius;
+        lump.Volume = chunk.Volume;
+        lump.Alpha = 0.95;
+        lump.LandDelay = 0.05;
+        lump.IgnoreOwner = drift.Owner;
+        lump.Lump = true;
+        lump.FallSpeed = 0;
+        lump.SwayAmp = 0;
+        lump.SwaySpeed = 0;
+        lump.VX = chunk.VX * 0.35;
+        lump.VY = chunk.VY * 0.2;
+        AddFlake(lump);
     }
 
     private void ReleaseEdge(SnowDrift drift, bool left, double volume)
     {
         if (volume < 0.5) return;
 
+        int count = Math.Clamp((int)Math.Ceiling(volume / 8.0), 1, 4);
+        double piece = volume / count;
+        double r = Math.Clamp(Math.Sqrt(piece / Math.PI), 0.6, 2.6);
+
         double x = left ? drift.SurfaceLeft + 0.5 : drift.SurfaceRight - 0.5;
         double y = drift.SurfaceTop - 0.5;
-        int count = (int)Math.Ceiling(volume / 8.0);
-        if (count < 1) count = 1;
-        if (count > 6) count = 6;
-        double piece = volume / count;
 
         for (int i = 0; i < count; i++)
         {
-            double r = Math.Sqrt(piece / Math.PI);
-            if (r < 0.6) r = 0.6;
-            if (r > 2.6) r = 2.6;
-
             var f = NewFlake(ParticlePreset.Powder,
                 x + (_rand.NextDouble() - 0.5) * 4,
                 y - _rand.NextDouble() * 2);
             f.R = r;
-            f.VX = (left ? -1 : 1) * (6 + _rand.NextDouble() * 12) + drift.TrackVX * 0.2;
-            f.VY = f.FallSpeed * 0.25;
             f.Volume = piece;
+            f.Alpha = 0.8;
+            f.LandDelay = 0.1;
+            f.IgnoreOwner = drift.Owner;
+            f.VX = (left ? -1 : 1) * (6 + _rand.NextDouble() * 12) + drift.TrackVX * 0.2;
+            f.VY = 8 + _rand.NextDouble() * 10;
             f.SwayAmp = 2 + _rand.NextDouble() * 6;
             f.SwaySpeed = 0.6 + _rand.NextDouble() * 1.2;
-            _flakes.Add(f);
+            AddFlake(f);
         }
     }
 
-    private void Spill(SnowDrift drift, double volume, double inherit, double vx = 0, double vy = 0)
+    private void Shed(SnowDrift drift, double volume, double inherit, double vx, double vy, int edgeBias)
     {
-        if (volume <= 0.4) return;
+        if (volume <= 0.2) return;
+        double total = drift.Volume;
+        if (total <= 0.2) return;
+        if (volume > total) volume = total;
 
-        int count = (int)Math.Ceiling(volume / 40.0);
-        if (count < 2) count = 2;
-        if (count > 24) count = 24; // Оптимизация: снижено для предотвращения лагов
+        vx = Math.Clamp(vx, -1200, 1200);
+        vy = Math.Clamp(vy, -1200, 1200);
 
-        double lumpVolume = volume / count;
-        double radius = Math.Sqrt(lumpVolume / Math.PI);
-        if (radius < 1.2) radius = 1.2;
-        if (radius > 9.0) radius = 9.0;
+        int count = (int)Math.Ceiling(volume / 8.0);
+        count = Math.Clamp(count, 4, 600);
+
+        var xs = new double[count];
+        var ys = new double[count];
+        for (int i = 0; i < count; i++)
+        {
+            double localX = edgeBias != 0 ? SampleColumnBias(drift, edgeBias) : SampleColumn(drift);
+            double depth = drift.HeightAt(localX);
+            xs[i] = drift.SurfaceLeft + localX;
+            ys[i] = drift.SurfaceTop - depth * _rand.NextDouble();
+        }
+
+        double removed = drift.RemoveVolume(volume, edgeBias);
+        if (removed <= 0.01) return;
+
+        double piece = removed / count;
+        double baseRadius = Math.Clamp(Math.Sqrt(piece / Math.PI), 0.8, 3.0);
 
         for (int i = 0; i < count; i++)
         {
-            double localX = SampleColumn(drift);
-            double x = drift.SurfaceLeft + localX;
-            double surface = drift.SurfaceTop - drift.HeightAt(localX);
-            double r = radius * (0.75 + _rand.NextDouble() * 0.5);
+            double r = baseRadius * (0.7 + _rand.NextDouble() * 0.6);
+            double inheritScale = 0.7 + _rand.NextDouble() * 0.3;
 
-            var f = NewFlake(ParticlePreset.Lump, x, surface + r * 0.5);
+            var f = NewFlake(ParticlePreset.Lump, xs[i], ys[i] - r - 0.5);
             f.R = r;
-            f.VX = (vx + drift.LastVX) * inherit * 0.2 + (_rand.NextDouble() - 0.5) * 40;
-            f.VY = f.FallSpeed + vy * inherit * 0.3;
-            f.Volume = lumpVolume;
+            f.Volume = piece;
+            f.Alpha = 0.95;
+            f.LandDelay = 0.05;
+            f.IgnoreOwner = drift.Owner;
             f.Lump = true;
-            f.SwayAmp = 4 + _rand.NextDouble() * 12;
-            f.SwaySpeed = 0.5 + _rand.NextDouble() * 1.4;
-            _flakes.Add(f);
+            f.FallSpeed = 0;
+            f.SwayAmp = 0;
+            f.SwaySpeed = 0;
+            f.VX = vx * inherit * inheritScale + (_rand.NextDouble() - 0.5) * 160;
+            double rawVY = vy * inherit * inheritScale + (_rand.NextDouble() - 0.5) * 110;
+            f.VY = vy < -80 ? rawVY : Math.Max(0, rawVY);
+            AddFlake(f);
         }
+    }
+
+    private double SampleColumnBias(SnowDrift drift, double bias)
+    {
+        int n = drift.Heights.Length;
+        if (n == 0) return 0;
+
+        double width = n * SnowDrift.ColumnWidth;
+        double u = _rand.NextDouble();
+
+        double localX;
+        if (bias > 0) localX = width * (0.7 + u * 0.3);
+        else          localX = width * u * 0.3;
+
+        return Math.Clamp(localX, 0, width - 0.001);
     }
 
     private void Puff(double x, double y, double vx, double vy, double volume)
     {
         if (volume <= 0.2) return;
 
-        int count = (int)Math.Ceiling(volume / 8.0);
-        if (count < 1) count = 1;
-        if (count > 10) count = 10; // Оптимизация: снижено с 24
-
-        double area = volume / count;
-        double radius = Math.Sqrt(area / Math.PI);
-        if (radius < 0.6) radius = 0.6;
-        if (radius > 3.0) radius = 3.0;
+        int count = Math.Clamp((int)Math.Ceiling(volume / 6.0), 1, 8);
+        double baseRadius = Math.Clamp(Math.Sqrt(volume / count / Math.PI), 0.6, 3.0);
 
         for (int i = 0; i < count; i++)
         {
-            double r = radius * (0.7 + _rand.NextDouble() * 0.6);
-            double piece = volume / count;
-
             var f = NewFlake(ParticlePreset.Powder,
                 x + (_rand.NextDouble() - 0.5) * 18,
                 y - _rand.NextDouble() * 6);
-            f.R = r;
-            f.VX = vx * 0.12 + (_rand.NextDouble() - 0.5) * 20;
-            f.VY = -6 - _rand.NextDouble() * 22;
-            f.Volume = piece;
-            f.SwayAmp = 2 + _rand.NextDouble() * 6;
-            f.SwaySpeed = 0.6 + _rand.NextDouble() * 1.2;
-            _flakes.Add(f);
+            f.R = baseRadius * (0.7 + _rand.NextDouble() * 0.6);
+            f.Volume = 0;
+            f.Alpha = 0.18 + _rand.NextDouble() * 0.12;
+            f.MoteLife = 0.45 + _rand.NextDouble() * 0.45;
+            f.VX = vx * 0.12 + (_rand.NextDouble() - 0.5) * 30;
+            f.VY = vy * 0.12 - 6 - _rand.NextDouble() * 22;
+            f.SwayAmp = 0;
+            f.SwaySpeed = 0;
+            AddFlake(f);
         }
     }
 
@@ -527,27 +688,19 @@ public sealed class SnowEngine
         return null;
     }
 
-    /// <summary>
-    /// ОПТИМИЗАЦИЯ И "ПЕРЕМУСОЛИВАНИЕ":
-    /// Стирание снега больше не вызывает фризов, так как проверка коллизий 
-    /// использует квадраты расстояний (без Math.Sqrt). А из стертого снега 
-    /// создается катящийся комок (Lump).
-    /// </summary>
     public void Spray(double x, double y, double vx, double vy)
     {
-        double speedSq = vx * vx + vy * vy;
-        double speed = Math.Sqrt(speedSq);
-        double radius = 6 + Math.Min(8, speed * 0.003);
-        double radiusSq = radius * radius;
+        double scale = Math.Clamp(_frameDt * 60.0, 0.25, 1.0);
+        double speed = Math.Sqrt(vx * vx + vy * vy);
+        double radius = 20.0 + Math.Min(30.0, speed * 0.015);
 
         int count = _flakes.Count;
         for (int i = 0; i < count; i++)
         {
             var f = _flakes[i];
+            if (f.MoteLife > 0) continue;
             double dx = f.X - x;
             double dy = f.Y - y;
-            
-            // Быстрая проверка без Math.Sqrt
             double distSq = dx * dx + dy * dy;
             double sumR = radius + f.R;
             if (distSq >= sumR * sumR) continue;
@@ -555,9 +708,9 @@ public sealed class SnowEngine
             double m = Math.Sqrt(distSq);
             if (m < 0.001) m = 0.001;
 
-            double push = 8 + speed * 0.035;
-            f.VX += (dx / m) * push + vx * 0.03;
-            f.VY += (dy / m) * push * 0.4 - 6;
+            double push = (15 + speed * 0.03) * scale;
+            f.VX += (dx / m) * push + vx * 0.03 * scale;
+            f.VY += (dy / m) * push * 0.4 - 4 * scale;
             _flakes[i] = f;
         }
 
@@ -572,7 +725,7 @@ public sealed class SnowEngine
 
             double top = drift.SurfaceTop;
             double surface = top - drift.HeightAtWorld(x);
-            if (y < surface - 8 || y > top + 12) continue;
+            if (y < surface - 15 || y > top + 20) continue;
 
             double distance = Math.Abs(y - surface);
             if (distance < targetDistance)
@@ -585,33 +738,38 @@ public sealed class SnowEngine
 
         if (target == null) return;
 
-        double depth = 0.6 + Math.Min(2.5, speed * 0.0008);
+        double depth = (6.0 + Math.Min(10.0, speed * 0.005)) * scale;
         double removed = target.Shave(x, radius, depth);
-        
-        if (removed > 0.2)
+        if (removed <= 0.1) return;
+
+        int lumps = Math.Clamp((int)Math.Ceiling(removed / 25.0), 1, 3);
+        double pieceVol = (removed * 0.9) / lumps;
+        double r = Math.Clamp(Math.Sqrt(pieceVol / Math.PI), 1.2, 4.0);
+
+        for (int i = 0; i < lumps; i++)
         {
-            Puff(x, targetSurface, vx, vy, removed * 0.3);
-            
-            // Создаем катящийся комок
-            double r = Math.Sqrt(removed / Math.PI);
-            if (r < 1.0) r = 1.0;
-            if (r > 6.0) r = 6.0;
-            
-            var lump = NewFlake(ParticlePreset.Lump, x, targetSurface - r);
+            var lump = NewFlake(ParticlePreset.Lump,
+                x + (_rand.NextDouble() - 0.5) * radius,
+                targetSurface - r - 1.0);
             lump.R = r;
-            lump.VX = vx * 0.3; 
-            lump.VY = vy * 0.3 - 2; 
-            lump.Volume = removed * 0.7;
+            lump.Volume = pieceVol;
+            lump.Alpha = 0.95;
+            lump.LandDelay = 0.1;
+            lump.IgnoreOwner = target.Owner;
             lump.Lump = true;
-            lump.SwayAmp = 2;
-            lump.SwaySpeed = 0.5;
-            _flakes.Add(lump);
+            lump.FallSpeed = 0;
+            lump.SwayAmp = 0;
+            lump.SwaySpeed = 0;
+            lump.VX = vx * 0.3 + (_rand.NextDouble() - 0.5) * 80;
+            lump.VY = vy * 0.3 - 10;
+            AddFlake(lump);
         }
     }
 
     public void Clear()
     {
         _flakes.Clear();
+        _recycleIndex = 0;
         ResetDrifts();
     }
 }

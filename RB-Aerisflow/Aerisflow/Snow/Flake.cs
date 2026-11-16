@@ -2,8 +2,6 @@ using System;
 
 namespace Aerisflow;
 
-/// <summary>Which preset a particle was spawned from. The presets keep the
-/// simulation data-only: adding or removing a flake never allocates an object.</summary>
 public enum ParticlePreset : byte
 {
     Far,
@@ -13,8 +11,6 @@ public enum ParticlePreset : byte
     Lump,
 }
 
-/// <summary>The tunable shape of a particle preset. Spawning reads a preset and
-/// writes a flat <see cref="Flake"/> struct, so the hot path allocates nothing.</summary>
 public readonly struct ParticlePresetData
 {
     public readonly double RadiusMin;
@@ -63,22 +59,28 @@ public readonly struct ParticlePresetData
     public double SwaySpeed(Random random) => SwaySpeedMin + random.NextDouble() * (SwaySpeedMax - SwaySpeedMin);
 }
 
-/// <summary>A single falling particle in the simulation. Coordinates are in
-/// device-independent pixels (1 unit = 1 DIP) of the overlay. This is a struct so
-/// the particle list is one flat, reusable array with no per-flake allocations.</summary>
 public struct Flake
 {
     public double X;
-    public double Y;          // vertical center
-    public double R;          // radius (DIP)
-    public double VX;         // horizontal velocity (px/s, + = right)
-    public double VY;         // current vertical velocity (px/s, + = down)
-    public double FallSpeed;  // terminal fall speed the flake eases back to
-    public double Alpha;      // 0..1, big clumps are brighter than specks
-    public double Volume;     // drift volume carried by a falling lump (0 = flake's circle)
-    public bool Lump;         // heavy chunk that bursts into powder when it lands
-    public double Phase;      // sway phase
-    public double SwayAmp;    // sway amplitude
-    public double SwaySpeed;  // sway speed
+    public double Y;
+    public double PrevX;
+    public double PrevY;
+    public double R;
+    public double VX;
+    public double VY;
+    public double FallSpeed;
+    public double Alpha;
+    public double Volume;
+    public bool Lump;
+    public double Phase;
+    public double SwayAmp;
+    public double SwaySpeed;
+    public double LandDelay;
+    public double MoteLife;
+    public IntPtr IgnoreOwner;
     public ParticlePreset Preset;
+
+    // NEW: точка спавна по Y. Нужна, чтобы снимать IgnoreOwner
+    // после того, как снежинка упала достаточно далеко от исходного окна.
+    public double SpawnY;
 }

@@ -3,11 +3,6 @@ using System.Runtime.InteropServices;
 
 namespace Aerisflow.Native;
 
-/// <summary>
-/// Windows 11 / 10 window dressing: an acrylic backdrop for the tray flyout,
-/// dark immersive mode and rounded DWM corners. Every call is best-effort so an
-/// older build of Windows simply gets the plain rounded card instead.
-/// </summary>
 internal static class WindowEffects
 {
     private const int WCA_ACCENT_POLICY = 19;
@@ -15,6 +10,9 @@ internal static class WindowEffects
     private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
     private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
+
+    private const uint DWM_BB_ENABLE = 0x1;
+    private const uint DWM_BB_BLURREGION = 0x2;
 
     private enum AccentState
     {
@@ -42,23 +40,50 @@ internal static class WindowEffects
         public int SizeOfData;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DWM_BLURBEHIND
+    {
+        public uint dwFlags;
+        public bool fEnable;
+        public IntPtr hRgnBlur;
+        public bool fTransitionOnMaximized;
+    }
+
     [DllImport("user32.dll")]
     private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 
-    /// <summary>Blurs whatever is behind the flyout and lays a smoky tint over it.</summary>
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmEnableBlurBehindWindow(IntPtr hWnd, ref DWM_BLURBEHIND pBlurBehind);
+
+    public static void EnableStrongBlur(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        try
+        {
+            var bb = new DWM_BLURBEHIND
+            {
+                dwFlags = DWM_BB_ENABLE | DWM_BB_BLURREGION,
+                fEnable = true,
+                hRgnBlur = IntPtr.Zero,
+                fTransitionOnMaximized = false,
+            };
+            DwmEnableBlurBehindWindow(hwnd, ref bb);
+        }
+        catch { }
+    }
+
     public static void ApplyAcrylic(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return;
 
-        // GradientColor is AABBGGRR: a soft, almost-black charcoal.
         var policy = new AccentPolicy
         {
             AccentState = AccentState.EnableAcrylicBlurBehind,
             AccentFlags = 2,
-            GradientColor = unchecked((int)0xC01E1B1B),
+            GradientColor = unchecked((int)0x66141418),
             AnimationId = 0,
         };
 
@@ -75,21 +100,15 @@ internal static class WindowEffects
             };
             SetWindowCompositionAttribute(hwnd, ref data);
         }
-        catch
-        {
-            // Not available on this build; the translucent card is the fallback.
-        }
+        catch { }
         finally
         {
             Marshal.FreeHGlobal(buffer);
         }
     }
 
-    /// <summary>Asks DWM for a transient (acrylic/blur) backdrop behind the flyout.</summary>
     public static void TrySystemBackdrop(IntPtr hwnd)
     {
-        // DWMWA_SYSTEMBACKDROP_TYPE = 3 (DWMSBT_TRANSIENTWINDOW) gives the flyout
-        // the acrylic-style backdrop the taskbar and alt-tab surfaces use.
         SetInt(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, 3);
     }
 
@@ -100,7 +119,7 @@ internal static class WindowEffects
 
     public static void UseRoundCorners(IntPtr hwnd)
     {
-        SetInt(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, 2); // DWMWCP_ROUND
+        SetInt(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, 2);
     }
 
     private static void SetInt(IntPtr hwnd, int attribute, int value)
@@ -110,9 +129,6 @@ internal static class WindowEffects
         {
             DwmSetWindowAttribute(hwnd, attribute, ref value, sizeof(int));
         }
-        catch
-        {
-            // Older Windows builds ignore attributes they don't know.
-        }
+        catch { }
     }
 }

@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Aerisflow.Native;
 using Aerisflow.UI;
+using Aerisflow.Updating;
 
 namespace Aerisflow;
 
@@ -21,9 +22,6 @@ public partial class App : global::System.Windows.Application
         _tray = new TrayIcon { OnOpenMenu = ToggleTrayMenu };
         _tray.Start(SnowIcon.Create());
 
-        // Hardware path first: Direct2D over DirectComposition. If the machine has no
-        // usable D3D11 device (remote session, very old GPU) the WPF renderer takes
-        // over with exactly the same engine and window tracker.
         _overlay = GpuSnowOverlay.TryCreate(_engine);
         if (_overlay != null)
         {
@@ -33,6 +31,8 @@ public partial class App : global::System.Windows.Application
         {
             ShowWpfOverlay();
         }
+
+        UpdateManager.Attach(this);
     }
 
     private void ShowWpfOverlay()
@@ -50,11 +50,6 @@ public partial class App : global::System.Windows.Application
         ShowWpfOverlay();
     }
 
-    /// <summary>
-    /// Lazy UI: the flyout is built on the first click and released the moment it
-    /// closes. Nothing of its XAML tree, brushes or effects stays resident while the
-    /// app is just snowing in the background.
-    /// </summary>
     private void ToggleTrayMenu()
     {
         if (_menu != null)
@@ -69,8 +64,6 @@ public partial class App : global::System.Windows.Application
         {
             if (ReferenceEquals(_menu, menu)) _menu = null;
 
-            // The window is gone; hand its visual tree back now instead of waiting
-            // for a generation that may never come.
             Dispatcher.BeginInvoke(
                 DispatcherPriority.Background,
                 new Action(() => GC.Collect(2, GCCollectionMode.Optimized, false, false)));
