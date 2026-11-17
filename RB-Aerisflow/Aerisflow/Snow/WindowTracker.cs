@@ -6,12 +6,6 @@ using Aerisflow.Native;
 
 namespace Aerisflow;
 
-/// <summary>
-/// Finds the top-level windows that can hold snow and keeps their visible frames
-/// up to date. A full enumeration runs a few times a second to see windows opening
-/// and closing; between them the known handles are re-read every frame so a window
-/// being dragged moves its snow smoothly instead of in 150 ms steps.
-/// </summary>
 public sealed class WindowTracker
 {
     private sealed class TrackedWindow
@@ -24,10 +18,6 @@ public sealed class WindowTracker
         public int InsetBottom;
     }
 
-    // Windows that aren't real surfaces: the desktop/wallpaper, shell flyouts,
-    // tooltips and shadows. Taskbars are deliberately excluded too - snow settles
-    // on the taskbar's top edge through the work area instead, and a vertical or
-    // auto-hiding taskbar can sit anywhere.
     private static readonly HashSet<string> IgnoredClasses = new HashSet<string>(StringComparer.Ordinal)
     {
         "Progman",
@@ -60,10 +50,6 @@ public sealed class WindowTracker
 
     public IReadOnlyList<WindowRect> Windows => _windows;
 
-    /// <param name="overlayHwnd">The overlay itself, which must not count as a window.</param>
-    /// <param name="monitorLeft">Left edge of the overlay's display, in physical pixels.</param>
-    /// <param name="monitorTop">Top edge of the overlay's display, in physical pixels.</param>
-    /// <param name="dipPerPixel">Overlay DIPs per physical pixel of that display (96 / DPI).</param>
     public WindowTracker(IntPtr overlayHwnd, int monitorLeft, int monitorTop, double dipPerPixel)
     {
         _overlayHwnd = overlayHwnd;
@@ -71,7 +57,7 @@ public sealed class WindowTracker
         _monitorTop = monitorTop;
         _dipPerPixel = dipPerPixel;
 
-        _fullTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _fullTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _fullTimer.Tick += (s, e) => Refresh();
         _fullTimer.Start();
         Refresh();
@@ -87,10 +73,6 @@ public sealed class WindowTracker
         _fullTimer.Stop();
     }
 
-    /// <summary>
-    /// Re-reads the bounds of the windows already known. Cheap enough for every frame;
-    /// a window dragged around moves its snow without waiting for the next full scan.
-    /// </summary>
     public void Poll()
     {
         _windows.Clear();
@@ -108,7 +90,6 @@ public sealed class WindowTracker
         }
     }
 
-    /// <summary>Full enumeration: new and closed windows, z-order, and fresh frame insets.</summary>
     public void Refresh()
     {
         var found = new List<TrackedWindow>();
@@ -127,7 +108,6 @@ public sealed class WindowTracker
     private void AddWindow(TrackedWindow tracked, NativeMethods.RECT r)
     {
         if (r.Right - r.Left < 2 || r.Bottom - r.Top < 2) return;
-        // Minimized windows sit far off-screen; don't let stale rects catch snow.
         if (r.Bottom <= -30000 || r.Right <= -30000) return;
 
         _windows.Add(new WindowRect
@@ -147,13 +127,11 @@ public sealed class WindowTracker
         if (!NativeMethods.IsWindowVisible(hwnd)) return null;
         if (NativeMethods.IsIconic(hwnd)) return null;
 
-        // Windows on another virtual desktop, or UWP shells not on screen, are invisible.
         if (NativeMethods.DwmGetWindowAttributeInt(hwnd, NativeMethods.DWMWA_CLOAKED, out var cloaked, sizeof(int)) == 0 && cloaked != 0)
         {
             return null;
         }
 
-        // Click-through windows are overlays like ours, not surfaces snow can rest on.
         var exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE).ToInt64();
         if ((exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0)
         {
@@ -165,9 +143,6 @@ public sealed class WindowTracker
 
         if (!NativeMethods.GetWindowRect(hwnd, out var plain)) return null;
 
-        // GetWindowRect includes the invisible resize borders Windows 10/11 draw
-        // around windows. Cache the difference to DWM's visible frame once, then
-        // apply it to every cheap per-frame GetWindowRect.
         int insetLeft = 0, insetTop = 0, insetRight = 0, insetBottom = 0;
         if (NativeMethods.DwmGetWindowAttribute(
                 hwnd,

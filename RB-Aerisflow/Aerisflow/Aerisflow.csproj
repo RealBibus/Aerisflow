@@ -8,14 +8,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Aerisflow</AssemblyName>
     <RootNamespace>Aerisflow</RootNamespace>
-    <Version>1.0</Version>
+    <Version>1.0.0</Version>
+    <ApplicationIcon>Aerisflow.ico</ApplicationIcon>
 
-    <!-- Память и стабильность -->
     <InvariantGlobalization>true</InvariantGlobalization>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
-    <TieredCompilation>false</TieredCompilation>
-    <TieredPGO>false</TieredPGO>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,10 +21,17 @@
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.DirectComposition" Version="3.8.3" />
   </ItemGroup>
+
   <ItemGroup>
-  <Compile Remove="Launcher\**" />
-  <None Remove="Launcher\**" />
-  <Compile Remove="Tools\**" />
-  <None Remove="Tools\**" />
-</ItemGroup>
+    <Compile Remove="Launcher\**" />
+    <None Remove="Launcher\**" />
+    <Compile Remove="Tools\**" />
+    <None Remove="Tools\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Aerisflow.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

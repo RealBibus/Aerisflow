@@ -99,16 +99,46 @@
                     <ControlTemplate TargetType="ToggleButton">
                         <Grid>
                             <Border x:Name="Track" CornerRadius="10" Background="#33FFFFFF"/>
+                            <Border x:Name="TrackOn" CornerRadius="10" Opacity="0"
+                                    Background="{DynamicResource {x:Static SystemColors.AccentColorBrushKey}}"/>
                             <Ellipse x:Name="Knob" Width="12" Height="12" Fill="#FFB9B9BE"
-                                     HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                     HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0,0,0"
+                                     RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform>
+                                    <TranslateTransform x:Name="KnobShift" X="0"/>
+                                </Ellipse.RenderTransform>
+                            </Ellipse>
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Track" Property="Background"
-                                        Value="{DynamicResource {x:Static SystemColors.AccentColorBrushKey}}"/>
-                                <Setter TargetName="Knob" Property="Fill" Value="#FFFFFFFF"/>
-                                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
-                                <Setter TargetName="Knob" Property="Margin" Value="0,0,4,0"/>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="KnobShift" Storyboard.TargetProperty="X"
+                                                             To="20" Duration="0:0:0.18">
+                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="TrackOn" Storyboard.TargetProperty="Opacity"
+                                                             To="1" Duration="0:0:0.18"/>
+                                            <ColorAnimation Storyboard.TargetName="Knob" Storyboard.TargetProperty="(Ellipse.Fill).(SolidColorBrush.Color)"
+                                                            To="#FFFFFFFF" Duration="0:0:0.18"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="KnobShift" Storyboard.TargetProperty="X"
+                                                             To="0" Duration="0:0:0.18">
+                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="TrackOn" Storyboard.TargetProperty="Opacity"
+                                                             To="0" Duration="0:0:0.18"/>
+                                            <ColorAnimation Storyboard.TargetName="Knob" Storyboard.TargetProperty="(Ellipse.Fill).(SolidColorBrush.Color)"
+                                                            To="#FFB9B9BE" Duration="0:0:0.18"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -173,6 +203,42 @@
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Margin" Value="2,0,0,6"/>
         </Style>
+
+        <Style x:Key="PopPanel" TargetType="Border">
+            <Setter Property="RenderTransformOrigin" Value="0.5,0"/>
+            <Setter Property="RenderTransform">
+                <Setter.Value>
+                    <TransformGroup>
+                        <ScaleTransform ScaleX="0.96" ScaleY="0.96"/>
+                        <TranslateTransform Y="10"/>
+                    </TransformGroup>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Opacity" Value="0"/>
+            <Style.Triggers>
+                <EventTrigger RoutedEvent="Loaded">
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.22">
+                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                            </DoubleAnimation>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleX)"
+                                             To="1" Duration="0:0:0.22">
+                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                            </DoubleAnimation>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleY)"
+                                             To="1" Duration="0:0:0.22">
+                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                            </DoubleAnimation>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TransformGroup.Children)[1].(TranslateTransform.Y)"
+                                             To="0" Duration="0:0:0.22">
+                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                            </DoubleAnimation>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </EventTrigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Border x:Name="RootBorder"
@@ -184,7 +250,7 @@
         <StackPanel>
 
             <TextBlock Text="SNOW" Style="{StaticResource GroupHeader}"/>
-            <Border Background="{StaticResource CardBrush}" CornerRadius="8" Padding="10,8" Margin="0,0,0,10">
+            <Border Style="{StaticResource PopPanel}" Background="{StaticResource CardBrush}" CornerRadius="8" Padding="10,8" Margin="0,0,0,10">
                 <StackPanel>
                     <Grid Margin="0,0,0,4">
                         <TextBlock Text="Intensity" Style="{StaticResource SectionLabel}"/>
@@ -232,7 +298,7 @@
             </Border>
 
             <TextBlock Text="BEHAVIOR" Style="{StaticResource GroupHeader}"/>
-            <Border Background="{StaticResource CardBrush}" CornerRadius="8" Padding="10,8" Margin="0,0,0,10">
+            <Border Style="{StaticResource PopPanel}" Background="{StaticResource CardBrush}" CornerRadius="8" Padding="10,8" Margin="0,0,0,10">
                 <StackPanel>
                     <Border x:Name="PerformanceHit" Background="Transparent" MouseLeftButtonUp="PerformanceHit_MouseUp" Cursor="Hand">
                         <Grid Height="24">
@@ -280,9 +346,9 @@
             </Border>
 
             <TextBlock Text="SYSTEM" Style="{StaticResource GroupHeader}"/>
-            <Border Background="{StaticResource CardBrush}" CornerRadius="8" Padding="10,8" Margin="0,0,0,10">
+            <Border Style="{StaticResource PopPanel}" Background="{StaticResource CardBrush}" CornerRadius="8" Padding="10,8" Margin="0,0,0,10">
                 <StackPanel>
-                    <Grid Margin="0,0,0,4">
+                    <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -290,7 +356,13 @@
                         <TextBlock Text="Start with Windows" Style="{StaticResource SubItemLabel}" VerticalAlignment="Center"/>
                         <ToggleButton Grid.Column="1" x:Name="AutoStartToggle" Style="{StaticResource SwitchToggle}" VerticalAlignment="Center"/>
                     </Grid>
-                    <Grid>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Text="UPDATES" Style="{StaticResource GroupHeader}"/>
+            <Border Style="{StaticResource PopPanel}" Background="{StaticResource CardBrush}" CornerRadius="8" Padding="10,8" Margin="0,0,0,10">
+                <StackPanel>
+                    <Grid Margin="0,0,0,4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -298,12 +370,7 @@
                         <TextBlock Text="Beta channel" Style="{StaticResource SubItemLabel}" VerticalAlignment="Center"/>
                         <ToggleButton Grid.Column="1" x:Name="BetaToggle" Style="{StaticResource SwitchToggle}" VerticalAlignment="Center"/>
                     </Grid>
-                </StackPanel>
-            </Border>
 
-            <TextBlock Text="UPDATES" Style="{StaticResource GroupHeader}"/>
-            <Border Background="{StaticResource CardBrush}" CornerRadius="8" Padding="10,8" Margin="0,0,0,10">
-                <StackPanel>
                     <Border x:Name="CheckUpdateHit" Background="Transparent" MouseLeftButtonUp="CheckUpdateHit_MouseUp" Cursor="Hand">
                         <Grid Height="24">
                             <TextBlock Text="Check for updates" Style="{StaticResource SubItemLabel}"/>
@@ -311,7 +378,7 @@
                         </Grid>
                     </Border>
 
-                    <Border x:Name="UpdateCard" Visibility="Collapsed"
+                    <Border x:Name="UpdateCard" Visibility="Collapsed" Style="{StaticResource PopPanel}"
                             Background="#14FFFFFF" CornerRadius="6" Padding="8" Margin="0,6,0,0">
                         <StackPanel>
                             <TextBlock x:Name="UpdateVersionText" Foreground="#F2FFFFFF" FontSize="13" FontWeight="SemiBold"/>

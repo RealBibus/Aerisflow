@@ -19,6 +19,35 @@ public partial class App : global::System.Windows.Application
     {
         base.OnStartup(e);
 
+        var settings = AppSettings.Load();
+        _engine.Intensity = settings.Intensity;
+        _engine.Opacity = settings.Opacity;
+        _engine.Melt = settings.Melt;
+        _engine.Wind = settings.Wind;
+        _engine.SpeedMultiplier = settings.Speed;
+        _engine.TargetFps = settings.TargetFps;
+        _engine.MeltAfterSeconds = settings.MeltAfterSeconds;
+        _engine.FullscreenMode = settings.FullscreenOn ? FullscreenOverlayMode.On : FullscreenOverlayMode.Off;
+
+        switch (settings.ModeIndex)
+        {
+            case 1:
+                _engine.ModeIntensityBoost = 0.5;
+                _engine.ModeSpeedBoost = 0.7;
+                _engine.Wind = 0;
+                break;
+            case 2:
+                _engine.ModeIntensityBoost = 2.0;
+                _engine.ModeSpeedBoost = 2.0;
+                _engine.Wind = 40;
+                break;
+            default:
+                _engine.ModeIntensityBoost = 1.0;
+                _engine.ModeSpeedBoost = 1.0;
+                _engine.Wind = 0;
+                break;
+        }
+
         _tray = new TrayIcon { OnOpenMenu = ToggleTrayMenu };
         _tray.Start(SnowIcon.Create());
 
@@ -33,6 +62,11 @@ public partial class App : global::System.Windows.Application
         }
 
         UpdateManager.Attach(this);
+
+        if (settings.AutoStart)
+        {
+            UpdateManager.ApplyAutoStart(true);
+        }
     }
 
     private void ShowWpfOverlay()

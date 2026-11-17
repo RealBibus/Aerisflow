@@ -232,8 +232,30 @@ public sealed class GpuSnowOverlay : IDisposable
 
     private void UpdateFullscreenState()
     {
+        bool active = false;
+
         int hr = SHQueryUserNotificationState(out int state);
-        _engine.IsFullscreenAppActive = hr == 0 && state == QUNS_RUNNING_D3D_FULL_SCREEN;
+        if (hr == 0 && state == QUNS_RUNNING_D3D_FULL_SCREEN) active = true;
+
+        if (!active) active = IsBorderlessFullscreen();
+
+        _engine.IsFullscreenAppActive = active;
+    }
+
+    private bool IsBorderlessFullscreen()
+    {
+        IntPtr fg = OverlayNative.GetForegroundWindow();
+        if (fg == IntPtr.Zero || fg == _hwnd) return false;
+        if (!OverlayNative.IsWindowVisible(fg)) return false;
+        if (IsCloaked(fg)) return false;
+
+        string cls = ClassName(fg);
+        if (cls == "Shell_TrayWnd" || cls == "Progman" || cls == "WorkerW") return false;
+
+        if (!OverlayNative.GetWindowRect(fg, out var r)) return false;
+        return r.Left <= _monitorLeft && r.Top <= _monitorTop
+            && r.Right >= _monitorLeft + _monitorWidth
+            && r.Bottom >= _monitorTop + _monitorHeight;
     }
 
     private static void PumpMessages()
@@ -422,14 +444,14 @@ public sealed class GpuSnowOverlay : IDisposable
         _d2dContext = _d2dDevice.CreateDeviceContext(DeviceContextOptions.None);
         RebindTargetBitmap();
 
-        _bankBrush = _d2dContext.CreateSolidColorBrush(new Color4(1f, 1f, 1f, 1f));
+        _bankBrush = _d2dContext.CreateSolidColorBrush(new Color4(0.86f, 0.92f, 1.00f, 1.0f));
 
-        var stops = new[]
-        {
-            new Vortice.Direct2D1.GradientStop(0f, new Color4(1f, 1f, 1f, 1f)),
-            new Vortice.Direct2D1.GradientStop(0.55f, new Color4(1f, 1f, 1f, 0.7f)),
-            new Vortice.Direct2D1.GradientStop(1f, new Color4(1f, 1f, 1f, 0f)),
-        };
+var stops = new[]
+{
+    new Vortice.Direct2D1.GradientStop(0f,    new Color4(0.92f, 0.96f, 1.00f, 1.00f)),
+    new Vortice.Direct2D1.GradientStop(0.55f, new Color4(0.86f, 0.92f, 1.00f, 0.70f)),
+    new Vortice.Direct2D1.GradientStop(1f,    new Color4(0.80f, 0.88f, 1.00f, 0.00f)),
+};
         using var stopCollection = _d2dContext.CreateGradientStopCollection(stops);
         _flakeBrush = _d2dContext.CreateRadialGradientBrush(
             new RadialGradientBrushProperties(new Vector2(0.5f, 0.5f), Vector2.Zero, 0.5f, 0.5f),
@@ -473,8 +495,6 @@ public sealed class GpuSnowOverlay : IDisposable
 
         bool hideAll = _engine.IsFullscreenAppActive &&
                        _engine.FullscreenMode == FullscreenOverlayMode.On;
-        bool hideDriftsOnly = _engine.IsFullscreenAppActive &&
-                              _engine.FullscreenMode == FullscreenOverlayMode.Off;
 
         context.BeginDraw();
         context.Clear(new Color4(0f, 0f, 0f, 0f));
@@ -489,16 +509,13 @@ public sealed class GpuSnowOverlay : IDisposable
 
         context.Transform = Matrix3x2.CreateScale((float)_pixelsPerDip);
 
-        if (!hideDriftsOnly)
+        bankBrush.Opacity = (float)(0.96 * opacity);
+        var drifts = _engine.Drifts;
+        for (int i = 0; i < drifts.Count; i++)
         {
-            bankBrush.Opacity = (float)(0.96 * opacity);
-            var drifts = _engine.Drifts;
-            for (int i = 0; i < drifts.Count; i++)
-            {
-                var drift = drifts[i];
-                if (!drift.HasSnow) continue;
-                DrawDrift(context, drift, bankBrush, alpha);
-            }
+            var drift = drifts[i];
+            if (!drift.HasSnow) continue;
+            DrawDrift(context, drift, bankBrush, alpha);
         }
 
         var flakes = _engine.Flakes;
@@ -750,6 +767,12 @@ internal static class OverlayNative
     [DllImport("user32.dll")]
     public static extern bool IsWindowVisible(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
 
@@ -767,6 +790,15 @@ internal static class OverlayNative
 
     [DllImport("user32.dll", EntryPoint = "DispatchMessageW")]
     public static extern IntPtr DispatchMessage(ref MSG lpMsg);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MSG

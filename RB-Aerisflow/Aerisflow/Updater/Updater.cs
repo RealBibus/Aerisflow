@@ -171,6 +171,12 @@ public sealed class UpdateService
         int bucket = UpdateCrypto.DeviceBucket(DeviceId());
         if (Channel != "beta" && bucket >= manifest.RolloutPercent) return null;
 
+        string? releaseBody = await GetReleaseBodyAsync(rel.tag_name);
+        if (!string.IsNullOrWhiteSpace(releaseBody))
+        {
+            manifest.ReleaseNotes = releaseBody;
+        }
+
         return new UpdateInfo { Manifest = manifest, AssetUrls = assets };
     }
 
@@ -186,12 +192,32 @@ public sealed class UpdateService
         catch { return null; }
     }
 
+    private async Task<string?> GetReleaseBodyAsync(string tag)
+    {
+        try
+        {
+            string url = $"https://api.github.com/repos/{UpdateConfig.GitHubOwner}/{UpdateConfig.GitHubRepo}/releases/tags/{tag}";
+            using var resp = await _http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode) return null;
+            var doc = JsonSerializer.Deserialize<ReleaseDetail>(await resp.Content.ReadAsStringAsync());
+            return doc?.body;
+        }
+        catch { return null; }
+    }
+
     private sealed class ReleaseDoc
     {
         public bool prerelease { get; set; }
         public bool draft { get; set; }
+        public string tag_name { get; set; } = "";
         public List<AssetDoc> assets { get; set; } = new();
     }
+
+    private sealed class ReleaseDetail
+    {
+        public string body { get; set; } = "";
+    }
+
     private sealed class AssetDoc
     {
         public string name { get; set; } = "";

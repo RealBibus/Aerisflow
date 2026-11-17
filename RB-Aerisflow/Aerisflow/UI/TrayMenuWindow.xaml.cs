@@ -177,7 +177,7 @@ public partial class TrayMenuWindow : Window
         }
     }
 
-        private void OnSourceInitialized(object? sender, EventArgs e)
+    private void OnSourceInitialized(object? sender, EventArgs e)
     {
         var hwnd = new WindowInteropHelper(this).Handle;
         WindowEffects.UseDarkMode(hwnd);

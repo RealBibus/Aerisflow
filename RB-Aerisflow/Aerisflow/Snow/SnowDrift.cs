@@ -16,12 +16,12 @@ public sealed class SnowDrift
     private const double Adhesion   = 3500.0;
     private const double Grip       = 1.2;
     private const double Slip       = 0.9;
-    private const double BreakLift  = 10.0;
-    private const double TrackTime  = 0.06;
+    private const double BreakLift  = 8.0;
+    private const double TrackTime  = 0.08;
     private const double Shaking    = 4.0;
 
     private const double MaxVisualOffsetX = 4.0;
-    private const double TrackSnapDistance = 120.0;
+    private const double TrackSnapDistance = 40.0;
 
     private readonly List<(double Left, double Right)> _visible = new List<(double Left, double Right)>();
     private readonly List<SnowChunk> _chunks = new List<SnowChunk>();
@@ -132,6 +132,7 @@ public sealed class SnowDrift
         _trackVX = 0;
         _trackVY = 0;
         Shedding = false;
+        _brokeOff = false;
         _visible.Clear();
         _visible.Add((0, Right - Left));
     }
@@ -157,6 +158,7 @@ public sealed class SnowDrift
         _swingDirX = 0;
         _swingDirY = 0;
         Shedding = false;
+        _brokeOff = false;
     }
 
     public void SetVisible(IReadOnlyList<(double Left, double Right)> segments)
@@ -178,6 +180,37 @@ public sealed class SnowDrift
             if (local >= _visible[i].Left && local <= _visible[i].Right) return true;
         }
         return false;
+    }
+
+    public void Push(double worldX, double forceX, double dt)
+    {
+        if (Owner == IntPtr.Zero) return;
+        if (!HasSnow) return;
+
+        double localX = worldX - SurfaceLeft;
+        int centre = (int)Math.Floor(localX / ColumnWidth);
+        if (centre < 0 || centre >= Heights.Length) return;
+
+        double pushForce = forceX * dt * 0.8;
+        _offsetVX += pushForce;
+
+        int direction = forceX > 0 ? 1 : -1;
+        int radius = 3;
+        for (int k = -radius; k <= radius; k++)
+        {
+            int i = centre + k;
+            if (i < 0 || i >= Heights.Length) continue;
+
+            double falloff = 1.0 - Math.Abs(k) / (radius + 1.0);
+            double transfer = Heights[i] * falloff * Math.Min(0.3, Math.Abs(pushForce) * 0.05);
+
+            int target = i + direction;
+            if (target >= 0 && target < Heights.Length)
+            {
+                Heights[i] -= transfer;
+                Heights[target] += transfer;
+            }
+        }
     }
 
     public void Step(double dt)
@@ -287,7 +320,7 @@ public sealed class SnowDrift
             }
         }
 
-        if (LiftY > BreakLift)
+        if (LiftY > BreakLift && HasSnow)
         {
             _brokeOff = true;
             _breakVX = _trackVX + _offsetVX;
@@ -299,16 +332,16 @@ public sealed class SnowDrift
         }
     }
 
-    public void TakeChunks(List<SnowChunk> destination)
-    {
-        for (int i = 0; i < _chunks.Count; i++) destination.Add(_chunks[i]);
-        _chunks.Clear();
-    }
-
     public void BreakVelocity(out double vx, out double vy)
     {
         vx = _breakVX;
         vy = _breakVY;
+    }
+
+    public void TakeChunks(List<SnowChunk> destination)
+    {
+        for (int i = 0; i < _chunks.Count; i++) destination.Add(_chunks[i]);
+        _chunks.Clear();
     }
 
     public void ClearSnow()
