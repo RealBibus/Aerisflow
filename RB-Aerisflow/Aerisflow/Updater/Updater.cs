@@ -7,21 +7,21 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Media;
-using System.Windows.Media.Animation;
 using Microsoft.Win32;
 using Application = System.Windows.Application;
-using Color = System.Windows.Media.Color;
 
 namespace Aerisflow.Updating;
 
 public static class UpdateConfig
 {
-    public const string GitHubOwner = "OWNER";
+    public const string GitHubOwner = "RealBibus";
     public const string GitHubRepo = "Aerisflow";
-    public const string PublicKeySpki = "PASTE_PUBLIC_KEY";
+    public const string PublicKeySpki =
+    "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArJVKkF0ORm77x3LQiseMrzTEyuVQygh4N9f0O84uqm2YuYgSyHdoaifZqFKu9xHNZB2K83mz2YrCF/KOJZUdCwrkhakT1zuK+iSUBVIJGkHXkLbNj7ksJg0HSJ3o/6hd17rX6dK90cTGlPx0FRxKGbNuJ/wBDnN5ooWA8fxANv32rkrOLEc4/O7Y/13XK1py6SEuxN9CrRd47gSyFXQelKcgnBi58q/9HhsQCqRZdnYqrUhlEr4Dmm8pTBKgac6c7zioPp1wle7hFL5pIDcQBgCEo7IWaq/Q3YOSSP1k+zRneeTtp/RrQUpzTNt0XisrOIF2mqGEhdkWdbgQMoOL5BFlnItWZ0WyhxkAnn2uVh8tfreYRgS1TmmNyk/MsUnMMUqxN4DZ88V6XYofbnSwe6/P2u1YsbFMbeAWpny/T9uO+5tfCrjAjoZhF9H7a2yfzDMcbWeuWxilJsjLBvtRNmS+PDUpREBR4UFw+wlxdyBFCCJUa+2HIoXl50AMpoBlAgMBAAE=";
     public const string AppExeName = "Aerisflow.exe";
 
     public static string RootDir
@@ -64,6 +64,7 @@ public sealed class UpdateInfo
 {
     public UpdateManifest Manifest { get; init; } = new();
     public IReadOnlyDictionary<string, string> AssetUrls { get; init; } = new Dictionary<string, string>();
+    public string ReleaseUrl { get; init; } = "";
 }
 
 public static class UpdateCrypto
@@ -96,11 +97,12 @@ public static class UpdateCrypto
 
 public sealed class UpdateService
 {
-    private readonly HttpClient _http = new();
-    public string Channel { get; set; } = "stable";
+    private readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 
+    public string Channel { get; set; } = "stable";
     public string Root => UpdateConfig.RootDir;
     public string CurrentAppDir => Path.Combine(Root, ReadCurrent()?.Dir ?? "");
+    public string CurrentVersion => ReadCurrent()?.Version ?? "";
 
     public UpdateService()
     {
@@ -111,19 +113,21 @@ public sealed class UpdateService
     public string DeviceId()
     {
         string p = Path.Combine(Root, "device.json");
-        if (File.Exists(p))
+        try
         {
-            try { return JsonSerializer.Deserialize<DeviceDoc>(File.ReadAllText(p))?.id ?? NewId(p); }
-            catch { return NewId(p); }
+            if (File.Exists(p))
+            {
+                string? id = JsonSerializer.Deserialize<DeviceDoc>(File.ReadAllText(p))?.id;
+                if (!string.IsNullOrWhiteSpace(id)) return id;
+            }
+            string fresh = Guid.NewGuid().ToString("N");
+            File.WriteAllText(p, JsonSerializer.Serialize(new DeviceDoc { id = fresh }));
+            return fresh;
         }
-        return NewId(p);
-    }
-
-    private string NewId(string p)
-    {
-        string id = Guid.NewGuid().ToString("N");
-        File.WriteAllText(p, JsonSerializer.Serialize(new DeviceDoc { id = id }));
-        return id;
+        catch
+        {
+            return Environment.MachineName + Environment.UserName;
+        }
     }
 
     private sealed class DeviceDoc { public string id { get; set; } = ""; }
@@ -147,23 +151,24 @@ public sealed class UpdateService
     public async Task<UpdateInfo?> CheckAsync()
     {
         var releases = await GetReleasesAsync();
-        if (releases == null) return null;
+        if (releases == null || releases.Count == 0) return null;
 
-        var rel = Channel == "beta"
-            ? releases.FirstOrDefault(r => r.prerelease)
-            : releases.FirstOrDefault(r => !r.prerelease && !r.draft);
-        if (rel == null) return null;
+        var release = releases
+        .Where(r => !r.draft && (Channel == "beta" ? r.prerelease : !r.prerelease))
+        .OrderByDescending(r => r.tag_name, new VersionOrder())
+        .FirstOrDefault();
+        if (release == null) return null;
 
-        var assets = rel.assets.ToDictionary(a => a.name, a => a.browser_download_url);
+        var assets = release.assets.ToDictionary(a => a.name, a => a.browser_download_url);
         if (!assets.TryGetValue("manifest.json", out var mUrl) || !assets.TryGetValue("manifest.sig", out var sUrl))
-            return null;
+        return null;
 
         byte[] mBytes = await _http.GetByteArrayAsync(mUrl);
         byte[] sBytes = await _http.GetByteArrayAsync(sUrl);
         if (!UpdateCrypto.VerifyManifest(mBytes, sBytes)) return null;
 
         var manifest = JsonSerializer.Deserialize<UpdateManifest>(mBytes);
-        if (manifest == null) return null;
+        if (manifest == null || string.IsNullOrWhiteSpace(manifest.Version)) return null;
 
         var cur = ReadCurrent();
         if (cur != null && CompareVersion(manifest.Version, cur.Version) <= 0) return null;
@@ -171,13 +176,15 @@ public sealed class UpdateService
         int bucket = UpdateCrypto.DeviceBucket(DeviceId());
         if (Channel != "beta" && bucket >= manifest.RolloutPercent) return null;
 
-        string? releaseBody = await GetReleaseBodyAsync(rel.tag_name);
-        if (!string.IsNullOrWhiteSpace(releaseBody))
-        {
-            manifest.ReleaseNotes = releaseBody;
-        }
+        string notes = PlainNotes(release.body);
+        manifest.ReleaseNotes = string.IsNullOrWhiteSpace(notes) ? PlainNotes(manifest.ReleaseNotes) : notes;
 
-        return new UpdateInfo { Manifest = manifest, AssetUrls = assets };
+        return new UpdateInfo
+        {
+            Manifest = manifest,
+            AssetUrls = assets,
+            ReleaseUrl = release.html_url,
+        };
     }
 
     private async Task<List<ReleaseDoc>?> GetReleasesAsync()
@@ -192,17 +199,18 @@ public sealed class UpdateService
         catch { return null; }
     }
 
-    private async Task<string?> GetReleaseBodyAsync(string tag)
+    public static string PlainNotes(string markdown)
     {
-        try
-        {
-            string url = $"https://api.github.com/repos/{UpdateConfig.GitHubOwner}/{UpdateConfig.GitHubRepo}/releases/tags/{tag}";
-            using var resp = await _http.GetAsync(url);
-            if (!resp.IsSuccessStatusCode) return null;
-            var doc = JsonSerializer.Deserialize<ReleaseDetail>(await resp.Content.ReadAsStringAsync());
-            return doc?.body;
-        }
-        catch { return null; }
+        if (string.IsNullOrWhiteSpace(markdown)) return "";
+        string text = markdown.Replace("\r", "");
+        text = Regex.Replace(text, @"<!--.*?-->", "", RegexOptions.Singleline);
+        text = Regex.Replace(text, @"!\[[^\]]*\]\([^)]*\)", "");
+        text = Regex.Replace(text, @"\[([^\]]+)\]\([^)]*\)", "$1");
+        text = Regex.Replace(text, @"^[ \t]*#{1,6}[ \t]*", "", RegexOptions.Multiline);
+        text = Regex.Replace(text, @"^[ \t]*[-*+][ \t]+", "• ", RegexOptions.Multiline);
+        text = text.Replace("**", "").Replace("__", "").Replace("`", "");
+        text = Regex.Replace(text, @"\n{3,}", "\n\n");
+        return text.Trim();
     }
 
     private sealed class ReleaseDoc
@@ -210,12 +218,9 @@ public sealed class UpdateService
         public bool prerelease { get; set; }
         public bool draft { get; set; }
         public string tag_name { get; set; } = "";
-        public List<AssetDoc> assets { get; set; } = new();
-    }
-
-    private sealed class ReleaseDetail
-    {
         public string body { get; set; } = "";
+        public string html_url { get; set; } = "";
+        public List<AssetDoc> assets { get; set; } = new();
     }
 
     private sealed class AssetDoc
@@ -224,32 +229,54 @@ public sealed class UpdateService
         public string browser_download_url { get; set; } = "";
     }
 
+    private sealed class VersionOrder : IComparer<string>
+    {
+        public int Compare(string? a, string? b) => CompareVersion(a ?? "", b ?? "");
+    }
+
     public static int CompareVersion(string a, string b)
     {
-        var pa = a.Split('.').Select(int.Parse).ToArray();
-        var pb = b.Split('.').Select(int.Parse).ToArray();
-        for (int i = 0; i < Math.Max(pa.Length, pb.Length); i++)
+        int[] pa = Parts(a);
+        int[] pb = Parts(b);
+        for (int i = 0; i < pa.Length; i++)
         {
-            int x = i < pa.Length ? pa[i] : 0;
-            int y = i < pb.Length ? pb[i] : 0;
-            if (x != y) return x.CompareTo(y);
+            if (pa[i] != pb[i]) return pa[i].CompareTo(pb[i]);
         }
         return 0;
+    }
+
+    private static int[] Parts(string version)
+    {
+        var numbers = new int[4];
+        if (string.IsNullOrWhiteSpace(version)) return numbers;
+        string text = version.Trim().TrimStart('v', 'V');
+        int cut = text.IndexOfAny(new[] { '-', '+' });
+        if (cut > 0) text = text.Substring(0, cut);
+        string[] parts = text.Split('.');
+        for (int i = 0; i < numbers.Length && i < parts.Length; i++) int.TryParse(parts[i], out numbers[i]);
+        return numbers;
     }
 
     public async Task<string> StageAsync(UpdateInfo info, IProgress<double>? progress = null)
     {
         string target = Path.Combine(Root, "app-" + info.Manifest.Version);
-        Directory.CreateDirectory(target);
-        string source = CurrentAppDir;
+        string marker = Path.Combine(target, "staged.ok");
+        if (File.Exists(marker) && File.Exists(Path.Combine(target, info.Manifest.Entry))) return target;
 
+        if (Directory.Exists(target))
+        {
+            try { Directory.Delete(target, true); } catch { }
+        }
+        Directory.CreateDirectory(target);
+
+        string source = CurrentAppDir;
         int done = 0;
         foreach (var f in info.Manifest.Files)
         {
             string dst = Path.Combine(target, f.Path.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-
             string src = Path.Combine(source, f.Path.Replace('/', Path.DirectorySeparatorChar));
+
             if (File.Exists(src) && UpdateCrypto.Sha256File(src) == f.Sha256)
             {
                 File.Copy(src, dst, true);
@@ -257,11 +284,11 @@ public sealed class UpdateService
             else
             {
                 if (!info.AssetUrls.TryGetValue(f.Asset, out var url))
-                    throw new InvalidOperationException("asset missing: " + f.Asset);
+                throw new InvalidOperationException("asset missing: " + f.Asset);
                 string tmp = dst + ".dl";
                 await using (var fs = File.Create(tmp))
                 await using (var stream = await _http.GetStreamAsync(url))
-                    await stream.CopyToAsync(fs);
+                await stream.CopyToAsync(fs);
                 if (UpdateCrypto.Sha256File(tmp) != f.Sha256)
                 {
                     File.Delete(tmp);
@@ -269,9 +296,15 @@ public sealed class UpdateService
                 }
                 File.Move(tmp, dst, true);
             }
+
             done++;
-            progress?.Report((double)done / info.Manifest.Files.Count);
+            progress?.Report((double)done / Math.Max(1, info.Manifest.Files.Count));
         }
+
+        if (!File.Exists(Path.Combine(target, info.Manifest.Entry)))
+        throw new InvalidOperationException("entry missing after staging: " + info.Manifest.Entry);
+
+        File.WriteAllText(marker, DateTime.UtcNow.ToString("O"));
         return target;
     }
 
@@ -299,133 +332,227 @@ public sealed class UpdateService
 
 public static class UpdateManager
 {
-    public static UpdateService Service { get; } = new();
+    public static UpdateService Service { get; } = new UpdateService();
+
     public static event Action<UpdateInfo>? UpdateAvailable;
     public static event Action<double>? StageProgress;
+    public static event Action? StageCompleted;
+    public static event Action? FadeOutRequested;
+
     public static UpdateInfo? Pending { get; private set; }
     public static string? StagedDir { get; private set; }
     public static bool Deferred { get; private set; }
+    public static bool IsStaged => StagedDir != null;
 
+    private static readonly SemaphoreSlim Gate = new SemaphoreSlim(1, 1);
     private static System.Windows.Threading.DispatcherTimer? _timer;
+
+    public static bool UpdatesEnabled => File.Exists(Path.Combine(UpdateConfig.RootDir, "current.json"));
 
     public static void Attach(Application app)
     {
-        Service.Channel = AppSettings.Load().Channel;
+        var settings = AppSettings.Load();
+        Service.Channel = settings.Channel;
         Service.MarkHealthy();
-        ApplyAutoStart(AppSettings.Load().AutoStart);
+        ApplyAutoStart(settings.AutoStart);
 
-        SystemEvents.SessionEnding += (s, e) =>
-        {
-            if (StagedDir != null)
-            {
-                try { Service.ApplyStaged(StagedDir); } catch { }
-            }
-        };
+        SystemEvents.SessionEnding += (s, e) => ApplyStagedIfAny();
+        app.Exit += (s, e) => ApplyStagedIfAny();
 
-        _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
+        if (!UpdatesEnabled) return;
+
+        AdoptStagedOnStartup();
+        CleanupOldVersions();
+
+        _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromHours(2) };
         _timer.Tick += async (s, e) => await CheckNowAsync();
         _timer.Start();
-        _ = CheckNowAsync();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(20));
+                await CheckNowAsync();
+            }
+            catch { }
+        });
     }
 
     public static async Task CheckNowAsync()
     {
-        var info = await Service.CheckAsync();
-        if (info != null)
+        if (!UpdatesEnabled) return;
+        if (!await Gate.WaitAsync(0)) return;
+        try
         {
+            var info = await Service.CheckAsync();
+            if (info == null) return;
             Pending = info;
             UpdateAvailable?.Invoke(info);
+            await StageCoreAsync(info, null);
+        }
+        catch { }
+        finally
+        {
+            Gate.Release();
         }
     }
 
     public static async Task StagePendingAsync(IProgress<double>? p = null)
     {
         if (Pending == null) return;
+        await Gate.WaitAsync();
+        try
+        {
+            await StageCoreAsync(Pending, p);
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    private static async Task<string> StageCoreAsync(UpdateInfo info, IProgress<double>? p)
+    {
         var progress = new Progress<double>(v => { p?.Report(v); StageProgress?.Invoke(v); });
-        StagedDir = await Service.StageAsync(Pending, progress);
+        StagedDir = await Service.StageAsync(info, progress);
+        StageCompleted?.Invoke();
+        return StagedDir;
     }
 
     public static void MarkDeferred() => Deferred = true;
 
+    public static void ApplyStagedIfAny()
+    {
+        if (StagedDir == null) return;
+        try { Service.ApplyStaged(StagedDir); } catch { }
+        StagedDir = null;
+    }
+
+    private static void AdoptStagedOnStartup()
+    {
+        try
+        {
+            var cur = Service.ReadCurrent();
+            if (cur == null || string.IsNullOrWhiteSpace(cur.Dir)) return;
+
+            string? best = null;
+            string bestVersion = cur.Version;
+            foreach (string dir in Directory.GetDirectories(UpdateConfig.RootDir, "app-*"))
+            {
+                if (!File.Exists(Path.Combine(dir, "staged.ok"))) continue;
+                string version = Path.GetFileName(dir).Replace("app-", "");
+                if (UpdateService.CompareVersion(version, bestVersion) <= 0) continue;
+                if (!File.Exists(Path.Combine(dir, UpdateConfig.AppExeName))) continue;
+                best = dir;
+                bestVersion = version;
+            }
+            if (best != null) Service.ApplyStaged(best);
+        }
+        catch { }
+    }
+
+    private static void CleanupOldVersions()
+    {
+        try
+        {
+            var cur = Service.ReadCurrent();
+            if (cur == null || string.IsNullOrWhiteSpace(cur.Dir)) return;
+
+            string? keepStaged = null;
+            string keepVersion = cur.Version;
+            foreach (string dir in Directory.GetDirectories(UpdateConfig.RootDir, "app-*"))
+            {
+                if (!File.Exists(Path.Combine(dir, "staged.ok"))) continue;
+                string version = Path.GetFileName(dir).Replace("app-", "");
+                if (UpdateService.CompareVersion(version, keepVersion) <= 0) continue;
+                keepStaged = Path.GetFileName(dir);
+                keepVersion = version;
+            }
+
+            foreach (string dir in Directory.GetDirectories(UpdateConfig.RootDir, "app-*"))
+            {
+                string name = Path.GetFileName(dir);
+                if (name == cur.Dir || name == cur.Previous || name == keepStaged) continue;
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+        catch { }
+    }
+
     public static void RestartWithUpdate()
     {
-        if (StagedDir != null) Service.ApplyStaged(StagedDir);
+        ApplyStagedIfAny();
         RestartApp();
     }
 
     public static async Task RestartWithVeilAsync()
     {
-        var veil = new Window
-        {
-            WindowStyle = WindowStyle.None,
-            AllowsTransparency = true,
-            Background = new SolidColorBrush(Color.FromArgb(0, 10, 14, 24)),
-            Topmost = true,
-            ShowInTaskbar = false,
-            WindowState = WindowState.Maximized,
-        };
-        veil.Show();
-        var anim = new ColorAnimation(Color.FromArgb(235, 10, 14, 24), TimeSpan.FromSeconds(0.9))
-        {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn },
-        };
-        ((SolidColorBrush)veil.Background).BeginAnimation(SolidColorBrush.ColorProperty, anim);
-        await Task.Delay(950);
+        FadeOutRequested?.Invoke();
+        await Task.Delay(1500);
         RestartWithUpdate();
-        veil.Close();
     }
 
     public static void RestartApp()
     {
         string launcher = Path.Combine(UpdateConfig.RootDir, "Launcher.exe");
+        string? target = null;
         if (File.Exists(launcher))
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(launcher) { UseShellExecute = true });
+        {
+            target = launcher;
+        }
+        else
+        {
+            target = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(target) || !File.Exists(target))
+            target = Path.Combine(AppContext.BaseDirectory, UpdateConfig.AppExeName);
+        }
+
+        if (!string.IsNullOrEmpty(target) && File.Exists(target))
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target)
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(target) ?? AppContext.BaseDirectory,
+            });
+        }
         Application.Current.Shutdown();
+    }
+
+    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string StartupApprovedPath =
+    @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+    private const string AutoStartValueName = "Aerisflow";
+
+    public static string AutoStartTarget()
+    {
+        string root = UpdateConfig.RootDir;
+        string launcher = Path.Combine(root, "Launcher.exe");
+        if (File.Exists(launcher) && File.Exists(Path.Combine(root, "current.json"))) return launcher;
+
+        string? process = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(process) && File.Exists(process)) return process;
+
+        string exe = Path.Combine(AppContext.BaseDirectory, UpdateConfig.AppExeName);
+        if (File.Exists(exe)) return exe;
+        return Path.Combine(AppContext.BaseDirectory, "Aerisflow.exe");
     }
 
     public static void ApplyAutoStart(bool on)
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
-            if (key == null) return;
-            if (on) key.SetValue("Aerisflow", "\"" + Path.Combine(UpdateConfig.RootDir, "Launcher.exe") + "\"");
-            else key.DeleteValue("Aerisflow", false);
+            using (var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, true))
+            {
+                if (key != null)
+                {
+                    if (on) key.SetValue(AutoStartValueName, "\"" + AutoStartTarget() + "\"", RegistryValueKind.String);
+                    else key.DeleteValue(AutoStartValueName, false);
+                }
+            }
+            using var approved = Registry.CurrentUser.OpenSubKey(StartupApprovedPath, true);
+            approved?.DeleteValue(AutoStartValueName, false);
         }
-        catch { }
-    }
-}
-
-public sealed class AppSettings
-{
-    public string Channel { get; set; } = "stable";
-    public bool AutoStart { get; set; } = true;
-    public double Intensity { get; set; } = 0.6;
-    public double Opacity { get; set; } = 1.0;
-    public bool Melt { get; set; }
-    public double Wind { get; set; }
-    public double Speed { get; set; } = 1.0;
-    public int TargetFps { get; set; } = 60;
-    public double MeltAfterSeconds { get; set; }
-    public bool FullscreenOn { get; set; } = true;
-    public int ModeIndex { get; set; }
-
-    public static string PathFile => System.IO.Path.Combine(UpdateConfig.RootDir, "settings.json");
-
-    public static AppSettings Load()
-    {
-        try
-        {
-            if (File.Exists(PathFile))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(PathFile)) ?? new();
-        }
-        catch { }
-        return new();
-    }
-
-    public void Save()
-    {
-        try { File.WriteAllText(PathFile, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true })); }
         catch { }
     }
 }

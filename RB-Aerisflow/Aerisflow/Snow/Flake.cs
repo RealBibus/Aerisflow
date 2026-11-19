@@ -9,6 +9,7 @@ public enum ParticlePreset : byte
     Near,
     Powder,
     Lump,
+    Blizzard,
 }
 
 public readonly struct ParticlePresetData
@@ -25,11 +26,11 @@ public readonly struct ParticlePresetData
     public readonly double SwaySpeedMax;
 
     private ParticlePresetData(
-        double radiusMin, double radiusMax,
-        double fallMin, double fallMax,
-        double alphaMin, double alphaMax,
-        double swayMin, double swayMax,
-        double swaySpeedMin, double swaySpeedMax)
+    double radiusMin, double radiusMax,
+    double fallMin, double fallMax,
+    double alphaMin, double alphaMax,
+    double swayMin, double swayMax,
+    double swaySpeedMin, double swaySpeedMax)
     {
         RadiusMin = radiusMin;
         RadiusMax = radiusMax;
@@ -49,6 +50,7 @@ public readonly struct ParticlePresetData
         ParticlePreset.Mid => new ParticlePresetData(1.6, 2.6, 32, 66, 0.42, 0.66, 5, 18, 0.3, 1.0),
         ParticlePreset.Near => new ParticlePresetData(2.6, 4.0, 46, 88, 0.56, 0.82, 6, 20, 0.2, 0.8),
         ParticlePreset.Powder => new ParticlePresetData(0.6, 2.4, 28, 64, 0.46, 0.74, 2, 8, 0.3, 0.9),
+        ParticlePreset.Blizzard => new ParticlePresetData(0.35, 1.25, 26, 58, 0.30, 0.58, 8, 26, 0.35, 1.5),
         _ => new ParticlePresetData(1.0, 8.0, 34, 78, 0.55, 0.9, 2, 10, 0.25, 0.8),
     };
 
@@ -79,8 +81,9 @@ public struct Flake
     public double MoteLife;
     public IntPtr IgnoreOwner;
     public ParticlePreset Preset;
-
-    // NEW: точка спавна по Y. Нужна, чтобы снимать IgnoreOwner
-    // после того, как снежинка упала достаточно далеко от исходного окна.
+    public bool Smoke;
+    public double SmokeLife;
+    public double SmokeBaseAlpha;
     public double SpawnY;
+    public double Wet;
 }

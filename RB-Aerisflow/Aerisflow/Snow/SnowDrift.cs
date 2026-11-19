@@ -19,13 +19,13 @@ public sealed class SnowDrift
     private const double BreakLift  = 8.0;
     private const double TrackTime  = 0.08;
     private const double Shaking    = 4.0;
-
     private const double MaxVisualOffsetX = 4.0;
     private const double TrackSnapDistance = 40.0;
 
     private readonly List<(double Left, double Right)> _visible = new List<(double Left, double Right)>();
     private readonly List<SnowChunk> _chunks = new List<SnowChunk>();
     private double[] _capacity = Array.Empty<double>();
+
     private readonly double _phase0;
     private readonly double _phase1;
 
@@ -44,6 +44,7 @@ public sealed class SnowDrift
     private double _spillLeft;
     private double _spillRight;
     private bool   _brokeOff;
+    private bool   _suppressBreak;
     private double _breakVX;
     private double _breakVY;
 
@@ -55,7 +56,6 @@ public sealed class SnowDrift
     public double Top   { get; private set; }
     public double Right { get; private set; }
     public double[] Heights { get; private set; }
-
     public double Depth { get; }
 
     public double OffsetX { get; private set; }
@@ -72,7 +72,6 @@ public sealed class SnowDrift
     public double LastVX    { get; set; }
     public double LastVY    { get; set; }
     public double LastSpeed { get; set; }
-
     public double MissingFor { get; set; }
 
     public double SurfaceLeft  => Left + OffsetX;
@@ -85,7 +84,7 @@ public sealed class SnowDrift
     public IReadOnlyList<(double Left, double Right)> Visible => _visible;
 
     public SnowDrift(IntPtr owner, string className, double left, double top, double right,
-                     double depth = MaxHeight, double phase0 = 0, double phase1 = 0)
+    double depth = MaxHeight, double phase0 = 0, double phase1 = 0)
     {
         Owner = owner;
         ClassName = className;
@@ -96,6 +95,7 @@ public sealed class SnowDrift
         Depth = depth;
         _phase0 = phase0;
         _phase1 = phase1;
+
         var count = Math.Max(1, (int)Math.Ceiling((Right - Left) / ColumnWidth));
         Heights = new double[count];
         _trackX = left;
@@ -133,6 +133,7 @@ public sealed class SnowDrift
         _trackVY = 0;
         Shedding = false;
         _brokeOff = false;
+        _suppressBreak = false;
         _visible.Clear();
         _visible.Add((0, Right - Left));
     }
@@ -159,6 +160,7 @@ public sealed class SnowDrift
         _swingDirY = 0;
         Shedding = false;
         _brokeOff = false;
+        _suppressBreak = false;
     }
 
     public void SetVisible(IReadOnlyList<(double Left, double Right)> segments)
@@ -186,7 +188,6 @@ public sealed class SnowDrift
     {
         if (Owner == IntPtr.Zero) return;
         if (!HasSnow) return;
-
         double localX = worldX - SurfaceLeft;
         int centre = (int)Math.Floor(localX / ColumnWidth);
         if (centre < 0 || centre >= Heights.Length) return;
@@ -200,10 +201,8 @@ public sealed class SnowDrift
         {
             int i = centre + k;
             if (i < 0 || i >= Heights.Length) continue;
-
             double falloff = 1.0 - Math.Abs(k) / (radius + 1.0);
             double transfer = Heights[i] * falloff * Math.Min(0.3, Math.Abs(pushForce) * 0.05);
-
             int target = i + direction;
             if (target >= 0 && target < Heights.Length)
             {
@@ -213,20 +212,32 @@ public sealed class SnowDrift
         }
     }
 
+    public void BassHop(double velocity)
+    {
+        if (!HasSnow) return;
+        if (LiftY < 0.5) LiftY = 0.5;
+        _liftVY = Math.Max(_liftVY, velocity);
+        _suppressBreak = true;
+    }
+
     public void Step(double dt)
     {
         _brokeOff = false;
         PrevOffsetX = OffsetX;
         PrevLiftY = LiftY;
+
         if (dt <= 0) return;
 
         if (Owner == IntPtr.Zero)
         {
             OffsetX = 0;
-            LiftY = 0;
             _offsetVX = 0;
-            _liftVY = 0;
-            return;
+            if (LiftY <= 0 && _liftVY <= 0)
+            {
+                LiftY = 0;
+                _liftVY = 0;
+                return;
+            }
         }
 
         double previousVX = _trackVX;
@@ -270,6 +281,7 @@ public sealed class SnowDrift
                 double impact = -_liftVY;
                 LiftY = 0;
                 _liftVY = 0;
+                _suppressBreak = false;
                 if (impact > 300)
                 {
                     Agitation = Math.Max(Agitation, Math.Min(6.0, impact / 800.0));
@@ -285,11 +297,13 @@ public sealed class SnowDrift
         double pressure = LiftY > 0 ? 0 : Math.Max(0, Gravity - ay);
         double drive = -ax;
         double slideVelocity = _offsetVX;
+
         if (!(slideVelocity == 0 && Math.Abs(drive) <= Grip * pressure))
         {
             double direction = slideVelocity != 0
-                ? Math.Sign(slideVelocity)
-                : (drive > 0 ? 1 : -1);
+            ? Math.Sign(slideVelocity)
+            : (drive > 0 ? 1 : -1);
+
             double next = slideVelocity + (drive - direction * Slip * pressure) * dt;
             slideVelocity = pressure > 0 && next * direction <= 0 ? 0 : next;
         }
@@ -320,7 +334,7 @@ public sealed class SnowDrift
             }
         }
 
-        if (LiftY > BreakLift && HasSnow)
+        if (LiftY > BreakLift && HasSnow && !_suppressBreak)
         {
             _brokeOff = true;
             _breakVX = _trackVX + _offsetVX;
@@ -353,7 +367,6 @@ public sealed class SnowDrift
     {
         int n = Heights.Length;
         if (n == 0) return;
-
         int index = direction > 0 ? n - 1 : 0;
         double height = Heights[index];
         double x = SurfaceLeft + (index + 0.5) * ColumnWidth;
@@ -381,7 +394,6 @@ public sealed class SnowDrift
         Right = Math.Max(Left + ColumnWidth, right);
         int count = Math.Max(1, (int)Math.Ceiling((Right - Left) / ColumnWidth));
         if (count == Heights.Length) return;
-
         var resized = new double[count];
         Array.Copy(Heights, resized, Math.Min(count, Heights.Length));
         Heights = resized;
@@ -395,7 +407,7 @@ public sealed class SnowDrift
         {
             double x = i * ColumnWidth;
             double drift = 0.12 * Math.Sin(x * 0.0105 + _phase0)
-                + 0.07 * Math.Sin(x * 0.037 + _phase1);
+            + 0.07 * Math.Sin(x * 0.037 + _phase1);
             _capacity[i] = Math.Max(1.0, Depth * (0.95 + drift));
         }
     }
@@ -442,7 +454,6 @@ public sealed class SnowDrift
     {
         if (fraction <= 0) return 0;
         if (fraction > 1) fraction = 1;
-
         double removed = 0;
         for (int i = 0; i < Heights.Length; i++)
         {
@@ -463,7 +474,6 @@ public sealed class SnowDrift
             Array.Clear(Heights, 0, Heights.Length);
             return total;
         }
-
         if (edgeBias == 0) return RemoveFraction(volume / total);
 
         double removed = 0;
@@ -492,14 +502,12 @@ public sealed class SnowDrift
     public double Shave(double worldX, double radius, double depth)
     {
         if (radius <= 0 || depth <= 0) return 0;
-
         double removed = 0;
         for (int i = 0; i < Heights.Length; i++)
         {
             double columnX = SurfaceLeft + (i + 0.5) * ColumnWidth;
             double distance = Math.Abs(columnX - worldX);
             if (distance > radius) continue;
-
             double bite = (1.0 - distance / radius) * depth;
             double take = Math.Min(Heights[i], bite);
             Heights[i] -= take;
@@ -563,7 +571,7 @@ public sealed class SnowDrift
         for (int i = 1; i < n - 2; i++)
         {
             double kink = (Heights[i] - Heights[i + 1])
-                - 0.5 * ((Heights[i - 1] - Heights[i]) + (Heights[i + 1] - Heights[i + 2]));
+            - 0.5 * ((Heights[i - 1] - Heights[i]) + (Heights[i + 1] - Heights[i + 2]));
             if (Math.Abs(kink) <= 0.02) continue;
             if (kink > 0)
             {
@@ -658,5 +666,6 @@ public readonly struct SnowChunk
     public double Height { get; }
     public double VX { get; }
     public double VY { get; }
+
     public double Volume => Height * SnowDrift.ColumnWidth;
 }

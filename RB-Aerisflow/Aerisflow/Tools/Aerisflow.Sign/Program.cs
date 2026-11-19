@@ -15,6 +15,7 @@ internal static class Program
             case "genkeys": return GenKeys(args);
             case "manifest": return BuildManifest(args);
             case "sign": return Sign(args);
+            case "verify": return Verify(args);
             default: Usage(); return 1;
         }
     }
@@ -24,6 +25,7 @@ internal static class Program
         Console.WriteLine("genkeys <outDir>");
         Console.WriteLine("manifest <appDir> <version> <channel> <rollout> <notesFile> <outManifest>");
         Console.WriteLine("sign <manifest> <privateKeyPem> <outSig>");
+        Console.WriteLine("verify <manifest> <sig> <publicKeyBase64File>");
     }
 
     private static int GenKeys(string[] args)
@@ -51,7 +53,8 @@ internal static class Program
         foreach (var f in Directory.GetFiles(appDir, "*", SearchOption.AllDirectories))
         {
             string rel = Path.GetRelativePath(appDir, f).Replace('\\', '/');
-            if (rel == "healthy.ok" || rel.EndsWith(".pdb")) continue;
+            if (rel is "healthy.ok" or "staged.ok" or "settings.json" or "device.json" or "current.json") continue;
+            if (rel.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase)) continue;
             using var sha = SHA256.Create();
             using var fs = File.OpenRead(f);
             string hash = Convert.ToHexString(sha.ComputeHash(fs)).ToLowerInvariant();
@@ -82,5 +85,19 @@ internal static class Program
         File.WriteAllBytes(args[3], sig);
         Console.WriteLine("sig written: " + args[3]);
         return 0;
+    }
+
+    private static int Verify(string[] args)
+    {
+        if (args.Length < 4) { Usage(); return 1; }
+        byte[] data = File.ReadAllBytes(args[1]);
+        byte[] sig = File.ReadAllBytes(args[2]);
+        using var rsa = RSA.Create();
+        rsa.ImportSubjectPublicKeyInfo(
+            Convert.FromBase64String(File.ReadAllText(args[3]).Trim()), out _);
+
+        bool ok = rsa.VerifyData(data, sig, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        Console.WriteLine(ok ? "signature OK" : "signature INVALID");
+        return ok ? 0 : 2;
     }
 }
